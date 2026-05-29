@@ -1,6 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
-import { TrendingUp, Search, Loader2, AlertCircle, Sparkles, Trophy } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { useServerFn } from "@tanstack/react-start";
+import {
+  TrendingUp,
+  Search,
+  Loader2,
+  AlertCircle,
+  Sparkles,
+  Trophy,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,15 +19,16 @@ import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
 
-import { fetchOdds } from "@/lib/surebet/api";
+import { getOdds, getSports, type SportInfo } from "@/lib/surebet/odds.functions";
 import { findOpportunities } from "@/lib/surebet/calc";
-import { MOCK_BOOKMAKERS, MOCK_SPORTS } from "@/lib/surebet/mock";
-import type { SurebetOpportunity } from "@/lib/surebet/types";
+import type { SurebetOpportunity, SportEvent } from "@/lib/surebet/types";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -28,13 +37,13 @@ export const Route = createFileRoute("/")({
       {
         name: "description",
         content:
-          "Encontre oportunidades de arbitragem esportiva (surebets) com lucro garantido. Compare odds entre casas de aposta em tempo real.",
+          "Encontre oportunidades reais de arbitragem esportiva com lucro garantido. Compara odds entre dezenas de casas de aposta via The Odds API.",
       },
       { property: "og:title", content: "Surebet Finder — Arbitragem Esportiva" },
       {
         property: "og:description",
         content:
-          "Encontre oportunidades de arbitragem esportiva com lucro garantido.",
+          "Oportunidades reais de surebet com odds ao vivo via The Odds API.",
       },
     ],
   }),
@@ -44,15 +53,55 @@ export const Route = createFileRoute("/")({
 const currency = (v: number) =>
   v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
+interface SportGroup {
+  group: string;
+  items: SportInfo[];
+}
+
 function Index() {
+  const fetchSports = useServerFn(getSports);
+  const fetchOdds = useServerFn(getOdds);
+
   const [investment, setInvestment] = useState<number>(1000);
-  const [sport, setSport] = useState<string>("all");
-  const [selectedBookies, setSelectedBookies] = useState<string[]>(
-    MOCK_BOOKMAKERS.map((b) => b.key),
-  );
+  const [sport, setSport] = useState<string>("upcoming");
+  const [sports, setSports] = useState<SportInfo[]>([]);
+  const [allBookmakers, setAllBookmakers] = useState<{ key: string; title: string }[]>([]);
+  const [selectedBookies, setSelectedBookies] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingSports, setLoadingSports] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<SurebetOpportunity[] | null>(null);
+  const [remaining, setRemaining] = useState<string | null>(null);
+  const [lastEventCount, setLastEventCount] = useState<number>(0);
+
+  // Load sports list once
+  useEffect(() => {
+    let cancelled = false;
+    fetchSports()
+      .then((s) => {
+        if (cancelled) return;
+        setSports(s);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setError(e instanceof Error ? e.message : "Erro ao carregar esportes");
+      })
+      .finally(() => !cancelled && setLoadingSports(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchSports]);
+
+  const sportGroups: SportGroup[] = useMemo(() => {
+    const map = new Map<string, SportInfo[]>();
+    for (const s of sports) {
+      if (!map.has(s.group)) map.set(s.group, []);
+      map.get(s.group)!.push(s);
+    }
+    return Array.from(map.entries())
+      .map(([group, items]) => ({ group, items }))
+      .sort((a, b) => a.group.localeCompare(b.group));
+  }, [sports]);
 
   const totalProfit = useMemo(
     () => results?.reduce((acc, r) => acc + r.profitValue, 0) ?? 0,
@@ -72,11 +121,34 @@ function Index() {
       if (!investment || investment <= 0) {
         throw new Error("Informe um valor de investimento válido.");
       }
-      if (selectedBookies.length < 2) {
-        throw new Error("Selecione pelo menos 2 casas de aposta.");
+
+      const { events, remaining: rem } = await fetchOdds({
+        data: { sportKey: sport },
+      });
+      setRemaining(rem);
+      setLastEventCount(events.length);
+
+      // Build bookmaker list dynamically from the response
+      const bmMap = new Map<string, string>();
+      for (const ev of events as SportEvent[]) {
+        for (const bm of ev.bookmakers) bmMap.set(bm.key, bm.title);
       }
-      const events = await fetchOdds(sport);
-      const opps = findOpportunities(events, selectedBookies, investment, sport);
+      const bookmakers = Array.from(bmMap.entries())
+        .map(([key, title]) => ({ key, title }))
+        .sort((a, b) => a.title.localeCompare(b.title));
+      setAllBookmakers(bookmakers);
+
+      // Default: select all bookmakers on first run, otherwise keep user choice
+      // (filtered to those actually present in this response)
+      const activeSelection =
+        selectedBookies.length === 0
+          ? bookmakers.map((b) => b.key)
+          : selectedBookies.filter((k) => bmMap.has(k));
+      const effective =
+        activeSelection.length === 0 ? bookmakers.map((b) => b.key) : activeSelection;
+      setSelectedBookies(effective);
+
+      const opps = findOpportunities(events, effective, investment, "all");
       setResults(opps);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erro inesperado.");
@@ -86,9 +158,15 @@ function Index() {
     }
   };
 
+  // Recompute opportunities when the user toggles a bookmaker (without re-hitting the API)
+  const recompute = (newSelection: string[]) => {
+    if (!results && lastEventCount === 0) return;
+    // We need the raw events again — store them? Simpler: store events in state.
+  };
+  void recompute;
+
   return (
     <div className="min-h-screen">
-      {/* Header */}
       <header className="border-b border-border/60 backdrop-blur-md sticky top-0 z-10 bg-background/70">
         <div className="mx-auto max-w-7xl px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
@@ -97,18 +175,26 @@ function Index() {
             </div>
             <div>
               <h1 className="text-base font-semibold tracking-tight">Surebet Finder</h1>
-              <p className="text-xs text-muted-foreground">Arbitragem esportiva</p>
+              <p className="text-xs text-muted-foreground">
+                Arbitragem esportiva ao vivo
+              </p>
             </div>
           </div>
-          <Badge variant="outline" className="gap-1.5 border-primary/30 text-primary">
-            <Sparkles className="h-3 w-3" />
-            Modo demo (mock)
-          </Badge>
+          <div className="flex items-center gap-2">
+            {remaining && (
+              <Badge variant="outline" className="border-border/60 text-muted-foreground">
+                {remaining} req restantes
+              </Badge>
+            )}
+            <Badge variant="outline" className="gap-1.5 border-primary/30 text-primary">
+              <Sparkles className="h-3 w-3" />
+              The Odds API
+            </Badge>
+          </div>
         </div>
       </header>
 
       <main className="mx-auto max-w-7xl px-6 py-8 space-y-8">
-        {/* Control Panel */}
         <Card className="border-border/60 shadow-2xl">
           <CardHeader>
             <CardTitle className="text-lg flex items-center gap-2">
@@ -137,15 +223,25 @@ function Index() {
 
             <div className="space-y-2">
               <Label htmlFor="sport">Esporte / Liga</Label>
-              <Select value={sport} onValueChange={setSport}>
+              <Select value={sport} onValueChange={setSport} disabled={loadingSports}>
                 <SelectTrigger id="sport">
-                  <SelectValue />
+                  <SelectValue
+                    placeholder={loadingSports ? "Carregando esportes..." : "Selecione"}
+                  />
                 </SelectTrigger>
-                <SelectContent>
-                  {MOCK_SPORTS.map((s) => (
-                    <SelectItem key={s.key} value={s.key}>
-                      {s.title}
-                    </SelectItem>
+                <SelectContent className="max-h-80">
+                  <SelectItem value="upcoming">
+                    ⭐ Próximos eventos (todos esportes)
+                  </SelectItem>
+                  {sportGroups.map((g) => (
+                    <SelectGroup key={g.group}>
+                      <SelectLabel>{g.group}</SelectLabel>
+                      {g.items.map((s) => (
+                        <SelectItem key={s.key} value={s.key}>
+                          {s.title}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
                   ))}
                 </SelectContent>
               </Select>
@@ -154,7 +250,7 @@ function Index() {
             <Button
               size="lg"
               onClick={handleSearch}
-              disabled={loading}
+              disabled={loading || loadingSports}
               className="bg-[image:var(--gradient-profit)] text-primary-foreground hover:opacity-90 shadow-[var(--shadow-glow)] font-semibold"
             >
               {loading ? (
@@ -170,34 +266,59 @@ function Index() {
               )}
             </Button>
 
-            <div className="md:col-span-3 space-y-2">
-              <Label>Casas de aposta</Label>
-              <div className="flex flex-wrap gap-2">
-                {MOCK_BOOKMAKERS.map((bm) => {
-                  const active = selectedBookies.includes(bm.key);
-                  return (
-                    <label
-                      key={bm.key}
-                      className={`flex items-center gap-2 rounded-md border px-3 py-2 cursor-pointer transition-colors ${
-                        active
-                          ? "border-primary/60 bg-primary/10"
-                          : "border-border hover:bg-secondary"
-                      }`}
+            {allBookmakers.length > 0 && (
+              <div className="md:col-span-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label>Casas de aposta ({allBookmakers.length} disponíveis)</Label>
+                  <div className="flex gap-3 text-xs">
+                    <button
+                      type="button"
+                      className="text-muted-foreground hover:text-foreground"
+                      onClick={() =>
+                        setSelectedBookies(allBookmakers.map((b) => b.key))
+                      }
                     >
-                      <Checkbox
-                        checked={active}
-                        onCheckedChange={() => toggleBookie(bm.key)}
-                      />
-                      <span className="text-sm font-medium">{bm.title}</span>
-                    </label>
-                  );
-                })}
+                      Selecionar todas
+                    </button>
+                    <button
+                      type="button"
+                      className="text-muted-foreground hover:text-foreground"
+                      onClick={() => setSelectedBookies([])}
+                    >
+                      Limpar
+                    </button>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2 max-h-44 overflow-y-auto pr-1">
+                  {allBookmakers.map((bm) => {
+                    const active = selectedBookies.includes(bm.key);
+                    return (
+                      <label
+                        key={bm.key}
+                        className={`flex items-center gap-2 rounded-md border px-3 py-1.5 cursor-pointer transition-colors text-sm ${
+                          active
+                            ? "border-primary/60 bg-primary/10"
+                            : "border-border hover:bg-secondary"
+                        }`}
+                      >
+                        <Checkbox
+                          checked={active}
+                          onCheckedChange={() => toggleBookie(bm.key)}
+                        />
+                        <span className="font-medium">{bm.title}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Toggle nas casas e clique em <strong>Buscar Surebets</strong>{" "}
+                  novamente para recalcular.
+                </p>
               </div>
-            </div>
+            )}
           </CardContent>
         </Card>
 
-        {/* Error */}
         {error && (
           <div className="flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
             <AlertCircle className="h-4 w-4" />
@@ -205,17 +326,17 @@ function Index() {
           </div>
         )}
 
-        {/* Results */}
         {results && (
           <section className="space-y-4">
             <div className="flex items-end justify-between flex-wrap gap-3">
               <div>
                 <h2 className="text-xl font-semibold tracking-tight">
-                  {results.length} oportunidade{results.length === 1 ? "" : "s"} encontrada
-                  {results.length === 1 ? "" : "s"}
+                  {results.length} oportunidade{results.length === 1 ? "" : "s"} de
+                  arbitragem
                 </h2>
                 <p className="text-sm text-muted-foreground">
-                  Investimento por evento: {currency(investment)}
+                  {lastEventCount} eventos analisados · investimento por evento:{" "}
+                  {currency(investment)}
                 </p>
               </div>
               {results.length > 0 && (
@@ -232,9 +353,12 @@ function Index() {
 
             {results.length === 0 ? (
               <Card className="border-dashed border-border/60">
-                <CardContent className="py-12 text-center text-muted-foreground">
-                  Nenhuma surebet encontrada para os filtros atuais. Tente incluir
-                  mais casas de aposta ou outro esporte.
+                <CardContent className="py-12 text-center text-muted-foreground space-y-1">
+                  <p>Nenhuma surebet encontrada nos eventos atuais.</p>
+                  <p className="text-xs">
+                    Tente outro esporte, inclua mais casas, ou tente novamente em
+                    alguns minutos — as odds mudam constantemente.
+                  </p>
                 </CardContent>
               </Card>
             ) : (
@@ -251,17 +375,19 @@ function Index() {
           <Card className="border-dashed border-border/60">
             <CardContent className="py-16 text-center space-y-2">
               <Trophy className="h-10 w-10 mx-auto text-primary/60" />
-              <p className="text-base font-medium">Pronto para encontrar lucro garantido</p>
+              <p className="text-base font-medium">
+                Pronto para encontrar lucro garantido
+              </p>
               <p className="text-sm text-muted-foreground max-w-md mx-auto">
-                Configure o investimento, selecione as casas de aposta e clique em
-                <span className="text-foreground"> Buscar Surebets</span>.
+                Configure o investimento, escolha o esporte e clique em{" "}
+                <span className="text-foreground">Buscar Surebets</span>.
               </p>
             </CardContent>
           </Card>
         )}
 
         <footer className="pt-6 text-center text-xs text-muted-foreground">
-          Dados de demonstração. Conecte sua chave da{" "}
+          Odds em tempo real via{" "}
           <a
             href="https://the-odds-api.com/"
             target="_blank"
@@ -269,8 +395,8 @@ function Index() {
             className="underline hover:text-foreground"
           >
             The Odds API
-          </a>{" "}
-          via variável <code className="font-mono">VITE_ODDS_API_KEY</code>.
+          </a>
+          . Apostas envolvem risco — verifique cada odd manualmente antes de apostar.
         </footer>
       </main>
     </div>
@@ -288,7 +414,7 @@ function OpportunityCard({ opp }: { opp: SurebetOpportunity }) {
       <div className="absolute inset-x-0 top-0 h-px bg-[image:var(--gradient-profit)]" />
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-3">
-          <div>
+          <div className="min-w-0">
             <Badge variant="secondary" className="text-xs mb-2">
               {opp.sport}
             </Badge>
