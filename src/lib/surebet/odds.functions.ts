@@ -50,6 +50,7 @@ export const getOdds = createServerFn({ method: "POST" })
     if (!apiKey) throw new Error("THE_ODDS_API_KEY is not configured");
 
     const now = new Date();
+    const toApiDate = (d: Date) => d.toISOString().replace(/\.\d{3}Z$/, "Z");
 
     const url = new URL(`${API_BASE}/sports/${data.sportKey}/odds/`);
     url.searchParams.set("apiKey", apiKey);
@@ -59,11 +60,11 @@ export const getOdds = createServerFn({ method: "POST" })
     url.searchParams.set("dateFormat", "iso");
 
     if (data.eventType === "upcoming") {
-      url.searchParams.set("commenceTimeFrom", now.toISOString());
+      url.searchParams.set("commenceTimeFrom", toApiDate(now));
     } else if (data.eventType === "live") {
       const from = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-      url.searchParams.set("commenceTimeFrom", from.toISOString());
-      url.searchParams.set("commenceTimeTo", now.toISOString());
+      url.searchParams.set("commenceTimeFrom", toApiDate(from));
+      url.searchParams.set("commenceTimeTo", toApiDate(now));
     }
 
     const res = await fetch(url.toString());
