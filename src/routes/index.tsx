@@ -172,14 +172,7 @@ function Index() {
 
       setBookmakerList(sortedList);
 
-      const presentKeys = new Set(bmMap.keys());
-      const activeSelection = selectedBookies.filter((k) => presentKeys.has(k));
-      const effective = activeSelection.length === 0
-        ? sortedList.filter((b) => presentKeys.has(b.key)).map((b) => b.key)
-        : activeSelection;
-      setSelectedBookies(effective);
-
-      const opps = findOpportunities(events, effective, investment, "all");
+      const opps = findOpportunities(events, selectedBookies, investment, "all");
       setResults(opps);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erro inesperado.");
