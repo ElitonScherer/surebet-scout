@@ -58,6 +58,29 @@ interface SportGroup {
   items: SportInfo[];
 }
 
+interface BookmakerEntry {
+  key: string;
+  title: string;
+  br: boolean;
+}
+
+const BRAZIL_BOOKMAKERS: BookmakerEntry[] = [
+  { key: "betano",          title: "Betano",       br: true },
+  { key: "superbet",        title: "Superbet",     br: true },
+  { key: "pinnacle",        title: "Pinnacle",     br: true },
+  { key: "betfair_ex_eu",   title: "Betfair",      br: true },
+  { key: "betmgm",          title: "BetMGM",       br: true },
+  { key: "bet365",          title: "Bet365",       br: true },
+  { key: "sportingbet",     title: "Sportingbet",  br: true },
+  { key: "novibet",         title: "Novibet",      br: true },
+  { key: "unibet_eu",       title: "Unibet",       br: true },
+  { key: "williamhill",     title: "William Hill", br: true },
+  { key: "1xbet",           title: "1xBet",        br: true },
+  { key: "bwin",            title: "Bwin",         br: true },
+];
+
+const BR_KEYS = new Set(BRAZIL_BOOKMAKERS.map((b) => b.key));
+
 function Index() {
   const fetchSports = useServerFn(getSports);
   const fetchOdds = useServerFn(getOdds);
@@ -65,31 +88,27 @@ function Index() {
   const [investment, setInvestment] = useState<number>(1000);
   const [sport, setSport] = useState<string>("upcoming");
   const [sports, setSports] = useState<SportInfo[]>([]);
-  const [allBookmakers, setAllBookmakers] = useState<{ key: string; title: string }[]>([]);
-  const [selectedBookies, setSelectedBookies] = useState<string[]>([]);
-  const [loading, setLoading] = useState(false);
   const [loadingSports, setLoadingSports] = useState(true);
+
+  const [bookmakerList, setBookmakerList] = useState<BookmakerEntry[]>(BRAZIL_BOOKMAKERS);
+  const [selectedBookies, setSelectedBookies] = useState<string[]>(
+    BRAZIL_BOOKMAKERS.map((b) => b.key),
+  );
+
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<SurebetOpportunity[] | null>(null);
   const [remaining, setRemaining] = useState<string | null>(null);
   const [lastEventCount, setLastEventCount] = useState<number>(0);
+  const [rawEvents, setRawEvents] = useState<SportEvent[]>([]);
 
-  // Load sports list once
   useEffect(() => {
     let cancelled = false;
     fetchSports()
-      .then((s) => {
-        if (cancelled) return;
-        setSports(s);
-      })
-      .catch((e) => {
-        if (cancelled) return;
-        setError(e instanceof Error ? e.message : "Erro ao carregar esportes");
-      })
+      .then((s) => { if (!cancelled) setSports(s); })
+      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : "Erro ao carregar esportes"); })
       .finally(() => !cancelled && setLoadingSports(false));
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [fetchSports]);
 
   const sportGroups: SportGroup[] = useMemo(() => {
@@ -114,6 +133,11 @@ function Index() {
     );
   };
 
+  const recompute = (events: SportEvent[], selection: string[]) => {
+    const opps = findOpportunities(events, selection, investment, "all");
+    setResults(opps);
+  };
+
   const handleSearch = async () => {
     setError(null);
     setLoading(true);
@@ -127,25 +151,32 @@ function Index() {
       });
       setRemaining(rem);
       setLastEventCount(events.length);
+      setRawEvents(events as SportEvent[]);
 
-      // Build bookmaker list dynamically from the response
       const bmMap = new Map<string, string>();
       for (const ev of events as SportEvent[]) {
         for (const bm of ev.bookmakers) bmMap.set(bm.key, bm.title);
       }
-      const bookmakers = Array.from(bmMap.entries())
-        .map(([key, title]) => ({ key, title }))
-        .sort((a, b) => a.title.localeCompare(b.title));
-      setAllBookmakers(bookmakers);
 
-      // Default: select all bookmakers on first run, otherwise keep user choice
-      // (filtered to those actually present in this response)
-      const activeSelection =
-        selectedBookies.length === 0
-          ? bookmakers.map((b) => b.key)
-          : selectedBookies.filter((k) => bmMap.has(k));
-      const effective =
-        activeSelection.length === 0 ? bookmakers.map((b) => b.key) : activeSelection;
+      const merged = new Map<string, BookmakerEntry>();
+      for (const b of BRAZIL_BOOKMAKERS) merged.set(b.key, b);
+      for (const [key, title] of bmMap.entries()) {
+        if (!merged.has(key)) merged.set(key, { key, title, br: false });
+      }
+
+      const sortedList = Array.from(merged.values()).sort((a, b) => {
+        if (a.br && !b.br) return -1;
+        if (!a.br && b.br) return 1;
+        return a.title.localeCompare(b.title);
+      });
+
+      setBookmakerList(sortedList);
+
+      const presentKeys = new Set(bmMap.keys());
+      const activeSelection = selectedBookies.filter((k) => presentKeys.has(k));
+      const effective = activeSelection.length === 0
+        ? sortedList.filter((b) => presentKeys.has(b.key)).map((b) => b.key)
+        : activeSelection;
       setSelectedBookies(effective);
 
       const opps = findOpportunities(events, effective, investment, "all");
@@ -158,12 +189,33 @@ function Index() {
     }
   };
 
-  // Recompute opportunities when the user toggles a bookmaker (without re-hitting the API)
-  const recompute = (newSelection: string[]) => {
-    if (!results && lastEventCount === 0) return;
-    // We need the raw events again — store them? Simpler: store events in state.
+  const handleBookieToggle = (key: string) => {
+    const next = selectedBookies.includes(key)
+      ? selectedBookies.filter((k) => k !== key)
+      : [...selectedBookies, key];
+    setSelectedBookies(next);
+    if (rawEvents.length > 0) recompute(rawEvents, next);
   };
-  void recompute;
+
+  const handleSelectAll = () => {
+    const all = bookmakerList.map((b) => b.key);
+    setSelectedBookies(all);
+    if (rawEvents.length > 0) recompute(rawEvents, all);
+  };
+
+  const handleClearAll = () => {
+    setSelectedBookies([]);
+    if (rawEvents.length > 0) recompute(rawEvents, []);
+  };
+
+  const handleSelectBrOnly = () => {
+    const brOnly = bookmakerList.filter((b) => b.br).map((b) => b.key);
+    setSelectedBookies(brOnly);
+    if (rawEvents.length > 0) recompute(rawEvents, brOnly);
+  };
+
+  const brBookmakers = bookmakerList.filter((b) => b.br);
+  const otherBookmakers = bookmakerList.filter((b) => !b.br);
 
   return (
     <div className="min-h-screen">
@@ -175,9 +227,7 @@ function Index() {
             </div>
             <div>
               <h1 className="text-base font-semibold tracking-tight">Surebet Finder</h1>
-              <p className="text-xs text-muted-foreground">
-                Arbitragem esportiva ao vivo
-              </p>
+              <p className="text-xs text-muted-foreground">Arbitragem esportiva ao vivo</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -194,15 +244,101 @@ function Index() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-7xl px-6 py-8 space-y-8">
-        <Card className="border-border/60 shadow-2xl">
-          <CardHeader>
-            <CardTitle className="text-lg flex items-center gap-2">
-              <Search className="h-4 w-4 text-primary" />
-              Painel de controle
+      <main className="mx-auto max-w-7xl px-6 py-8 space-y-6">
+
+        {/* Step 1 — Casas de aposta */}
+        <Card className="border-border/60 shadow-xl">
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <CardTitle className="text-base flex items-center gap-2">
+                <span className="h-5 w-5 rounded-full bg-primary text-primary-foreground text-xs flex items-center justify-center font-bold">1</span>
+                Casas de aposta
+              </CardTitle>
+              <div className="flex gap-3 text-xs">
+                <button
+                  type="button"
+                  className="text-primary hover:text-primary/80 font-medium"
+                  onClick={handleSelectBrOnly}
+                >
+                  Só Brasil
+                </button>
+                <button
+                  type="button"
+                  className="text-muted-foreground hover:text-foreground"
+                  onClick={handleSelectAll}
+                >
+                  Todas
+                </button>
+                <button
+                  type="button"
+                  className="text-muted-foreground hover:text-foreground"
+                  onClick={handleClearAll}
+                >
+                  Limpar
+                </button>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <p className="text-xs text-muted-foreground mb-2 flex items-center gap-1">
+                🇧🇷 <span className="font-medium text-foreground">Operando no Brasil</span>
+                <span className="ml-1">· {selectedBookies.filter((k) => brBookmakers.some((b) => b.key === k)).length}/{brBookmakers.length} selecionadas</span>
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {brBookmakers.map((bm) => {
+                  const active = selectedBookies.includes(bm.key);
+                  return (
+                    <BookieChip
+                      key={bm.key}
+                      label={bm.title}
+                      active={active}
+                      onToggle={() => handleBookieToggle(bm.key)}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+
+            {otherBookmakers.length > 0 && (
+              <div>
+                <p className="text-xs text-muted-foreground mb-2">
+                  Outras casas disponíveis na busca
+                </p>
+                <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto pr-1">
+                  {otherBookmakers.map((bm) => {
+                    const active = selectedBookies.includes(bm.key);
+                    return (
+                      <BookieChip
+                        key={bm.key}
+                        label={bm.title}
+                        active={active}
+                        onToggle={() => handleBookieToggle(bm.key)}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            <p className="text-xs text-muted-foreground">
+              {selectedBookies.length === 0
+                ? "⚠️ Nenhuma casa selecionada."
+                : `${selectedBookies.length} casa${selectedBookies.length === 1 ? "" : "s"} selecionada${selectedBookies.length === 1 ? "" : "s"}.`}{" "}
+              {rawEvents.length > 0 && "Os resultados são recalculados automaticamente ao alterar a seleção."}
+            </p>
+          </CardContent>
+        </Card>
+
+        {/* Step 2 — Esporte e busca */}
+        <Card className="border-border/60 shadow-xl">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <span className="h-5 w-5 rounded-full bg-primary text-primary-foreground text-xs flex items-center justify-center font-bold">2</span>
+              Esporte e investimento
             </CardTitle>
           </CardHeader>
-          <CardContent className="grid gap-6 md:grid-cols-[1fr_1fr_auto] md:items-end">
+          <CardContent className="grid gap-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
             <div className="space-y-2">
               <Label htmlFor="investment">Valor do investimento total</Label>
               <div className="relative">
@@ -250,7 +386,7 @@ function Index() {
             <Button
               size="lg"
               onClick={handleSearch}
-              disabled={loading || loadingSports}
+              disabled={loading || loadingSports || selectedBookies.length === 0}
               className="bg-[image:var(--gradient-profit)] text-primary-foreground hover:opacity-90 shadow-[var(--shadow-glow)] font-semibold"
             >
               {loading ? (
@@ -265,57 +401,6 @@ function Index() {
                 </>
               )}
             </Button>
-
-            {allBookmakers.length > 0 && (
-              <div className="md:col-span-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label>Casas de aposta ({allBookmakers.length} disponíveis)</Label>
-                  <div className="flex gap-3 text-xs">
-                    <button
-                      type="button"
-                      className="text-muted-foreground hover:text-foreground"
-                      onClick={() =>
-                        setSelectedBookies(allBookmakers.map((b) => b.key))
-                      }
-                    >
-                      Selecionar todas
-                    </button>
-                    <button
-                      type="button"
-                      className="text-muted-foreground hover:text-foreground"
-                      onClick={() => setSelectedBookies([])}
-                    >
-                      Limpar
-                    </button>
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-2 max-h-44 overflow-y-auto pr-1">
-                  {allBookmakers.map((bm) => {
-                    const active = selectedBookies.includes(bm.key);
-                    return (
-                      <label
-                        key={bm.key}
-                        className={`flex items-center gap-2 rounded-md border px-3 py-1.5 cursor-pointer transition-colors text-sm ${
-                          active
-                            ? "border-primary/60 bg-primary/10"
-                            : "border-border hover:bg-secondary"
-                        }`}
-                      >
-                        <Checkbox
-                          checked={active}
-                          onCheckedChange={() => toggleBookie(bm.key)}
-                        />
-                        <span className="font-medium">{bm.title}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Toggle nas casas e clique em <strong>Buscar Surebets</strong>{" "}
-                  novamente para recalcular.
-                </p>
-              </div>
-            )}
           </CardContent>
         </Card>
 
@@ -331,12 +416,10 @@ function Index() {
             <div className="flex items-end justify-between flex-wrap gap-3">
               <div>
                 <h2 className="text-xl font-semibold tracking-tight">
-                  {results.length} oportunidade{results.length === 1 ? "" : "s"} de
-                  arbitragem
+                  {results.length} oportunidade{results.length === 1 ? "" : "s"} de arbitragem
                 </h2>
                 <p className="text-sm text-muted-foreground">
-                  {lastEventCount} eventos analisados · investimento por evento:{" "}
-                  {currency(investment)}
+                  {lastEventCount} eventos analisados · investimento por evento: {currency(investment)}
                 </p>
               </div>
               {results.length > 0 && (
@@ -354,10 +437,9 @@ function Index() {
             {results.length === 0 ? (
               <Card className="border-dashed border-border/60">
                 <CardContent className="py-12 text-center text-muted-foreground space-y-1">
-                  <p>Nenhuma surebet encontrada nos eventos atuais.</p>
+                  <p>Nenhuma surebet encontrada com as casas selecionadas.</p>
                   <p className="text-xs">
-                    Tente outro esporte, inclua mais casas, ou tente novamente em
-                    alguns minutos — as odds mudam constantemente.
+                    Tente incluir mais casas, outro esporte, ou aguarde — as odds mudam constantemente.
                   </p>
                 </CardContent>
               </Card>
@@ -375,11 +457,9 @@ function Index() {
           <Card className="border-dashed border-border/60">
             <CardContent className="py-16 text-center space-y-2">
               <Trophy className="h-10 w-10 mx-auto text-primary/60" />
-              <p className="text-base font-medium">
-                Pronto para encontrar lucro garantido
-              </p>
+              <p className="text-base font-medium">Pronto para encontrar lucro garantido</p>
               <p className="text-sm text-muted-foreground max-w-md mx-auto">
-                Configure o investimento, escolha o esporte e clique em{" "}
+                Selecione as casas, escolha o esporte e clique em{" "}
                 <span className="text-foreground">Buscar Surebets</span>.
               </p>
             </CardContent>
@@ -400,6 +480,29 @@ function Index() {
         </footer>
       </main>
     </div>
+  );
+}
+
+function BookieChip({
+  label,
+  active,
+  onToggle,
+}: {
+  label: string;
+  active: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <label
+      className={`flex items-center gap-2 rounded-md border px-3 py-1.5 cursor-pointer transition-colors text-sm select-none ${
+        active
+          ? "border-primary/60 bg-primary/10 text-foreground"
+          : "border-border hover:bg-secondary text-muted-foreground"
+      }`}
+    >
+      <Checkbox checked={active} onCheckedChange={onToggle} />
+      <span className="font-medium">{label}</span>
+    </label>
   );
 }
 
