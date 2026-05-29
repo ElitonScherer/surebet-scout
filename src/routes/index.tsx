@@ -26,7 +26,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-import { getOdds, getSports, type SportInfo } from "@/lib/surebet/odds.functions";
+import { getOdds, getSports, type SportInfo, type EventType } from "@/lib/surebet/odds.functions";
 import { findOpportunities } from "@/lib/surebet/calc";
 import type { SurebetOpportunity, SportEvent } from "@/lib/surebet/types";
 
@@ -95,6 +95,7 @@ function Index() {
     BRAZIL_BOOKMAKERS.map((b) => b.key),
   );
 
+  const [eventType, setEventType] = useState<EventType>("all");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<SurebetOpportunity[] | null>(null);
@@ -147,7 +148,7 @@ function Index() {
       }
 
       const { events, remaining: rem } = await fetchOdds({
-        data: { sportKey: sport },
+        data: { sportKey: sport, eventType },
       });
       setRemaining(rem);
       setLastEventCount(events.length);
@@ -331,7 +332,34 @@ function Index() {
               Esporte e investimento
             </CardTitle>
           </CardHeader>
-          <CardContent className="grid gap-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label>Tipo de evento</Label>
+              <div className="flex gap-2">
+                {(
+                  [
+                    { value: "all",      label: "Todos" },
+                    { value: "upcoming", label: "🕐 Próximos" },
+                    { value: "live",     label: "🔴 Ao vivo" },
+                  ] as { value: EventType; label: string }[]
+                ).map(({ value, label }) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setEventType(value)}
+                    className={`px-4 py-1.5 rounded-md border text-sm font-medium transition-colors ${
+                      eventType === value
+                        ? "border-primary/60 bg-primary/10 text-foreground"
+                        : "border-border text-muted-foreground hover:bg-secondary"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
             <div className="space-y-2">
               <Label htmlFor="investment">Valor do investimento total</Label>
               <div className="relative">
@@ -394,6 +422,7 @@ function Index() {
                 </>
               )}
             </Button>
+            </div>
           </CardContent>
         </Card>
 
