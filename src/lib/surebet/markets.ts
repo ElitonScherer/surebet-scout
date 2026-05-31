@@ -7,7 +7,7 @@ export interface MarketSpec {
 }
 
 // Valid markets per The Odds API docs: h2h, spreads, totals, outrights
-// btts is NOT a documented valid market key — removed
+// btts is listed here but marked unavailable for The Odds API — see providers.ts
 export const MARKET_OPTIONS: MarketSpec[] = [
   {
     key: "h2h",
@@ -34,6 +34,12 @@ export const MARKET_OPTIONS: MarketSpec[] = [
     apiMarket: "spreads",
     label: "Handicap",
     description: "Handicap asiático / spread de pontos",
+  },
+  {
+    key: "btts",
+    apiMarket: "btts",
+    label: "Ambos Marcam",
+    description: "Ambos os times marcam (Sim / Não)",
   },
 ];
 

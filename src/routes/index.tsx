@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useRef, useMemo, useState } from "react";
+import { useEffect, useRef, useMemo, useState, type ReactNode } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import {
   TrendingUp,
@@ -41,6 +41,7 @@ import {
 import { getOdds, getSports, type SportInfo, type EventType } from "@/lib/surebet/odds.functions";
 import { findOpportunities } from "@/lib/surebet/calc";
 import { MARKET_OPTIONS, getMarketByKey, buildApiMarketsParam } from "@/lib/surebet/markets";
+import { PROVIDERS, getProviderByKey, DEFAULT_PROVIDER_KEY } from "@/lib/surebet/providers";
 import { sendTelegramMessage } from "@/lib/telegram.server";
 import type { SurebetOpportunity, SportEvent } from "@/lib/surebet/types";
 
@@ -137,6 +138,9 @@ function Index() {
   const [sports, setSports] = useState<SportInfo[]>([]);
   const [loadingSports, setLoadingSports] = useState(true);
 
+  // ── Provider / server ────────────────────────────────────────────────────
+  const [selectedProvider, setSelectedProvider] = useState<string>(DEFAULT_PROVIDER_KEY);
+
   // ── Markets (multi-select) ────────────────────────────────────────────────
   const [selectedMarkets, setSelectedMarkets] = useState<string[]>(["h2h"]);
 
@@ -228,8 +232,20 @@ function Index() {
     if (rawEvents.length > 0) recompute(rawEvents, brOnly);
   };
 
+  // ── Provider change ──────────────────────────────────────────────────────
+  const handleProviderChange = (key: string) => {
+    setSelectedProvider(key);
+    const provider = getProviderByKey(key);
+    const valid = selectedMarkets.filter((mk) => !provider.unsupportedMarketKeys.includes(mk));
+    const next = valid.length > 0 ? valid : ["h2h"];
+    setSelectedMarkets(next);
+    if (rawEvents.length > 0) recompute(rawEvents, selectedBookies, next);
+  };
+
   // ── Market toggle (multi-select) ─────────────────────────────────────────
   const handleMarketToggle = (key: string) => {
+    const provider = getProviderByKey(selectedProvider);
+    if (provider.unsupportedMarketKeys.includes(key)) return; // blocked by provider
     const next = selectedMarkets.includes(key)
       ? selectedMarkets.filter((k) => k !== key).length > 0
         ? selectedMarkets.filter((k) => k !== key)
@@ -458,15 +474,48 @@ function Index() {
           </CardContent>
         </Card>
 
-        {/* Step 2 — Tipo de evento e Liga */}
+        {/* Step 2 — Servidor, tipo de evento e Liga */}
         <Card className="border-border/60 shadow-xl">
           <CardHeader className="pb-3">
             <CardTitle className="text-base flex items-center gap-2">
               <StepBadge n={2} />
-              Tipo de evento e liga
+              Servidor, tipo de evento e liga
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label>Servidor de dados</Label>
+              <div className="flex flex-wrap gap-2">
+                {PROVIDERS.map((p) => (
+                  <button
+                    key={p.key}
+                    type="button"
+                    disabled={!p.available}
+                    onClick={() => p.available && handleProviderChange(p.key)}
+                    className={`flex flex-col items-start px-4 py-2.5 rounded-md border text-sm transition-colors text-left ${
+                      !p.available
+                        ? "border-border/40 text-muted-foreground/40 cursor-not-allowed opacity-50"
+                        : selectedProvider === p.key
+                          ? "border-primary/60 bg-primary/10 text-foreground"
+                          : "border-border text-muted-foreground hover:bg-secondary"
+                    }`}
+                  >
+                    <span className="font-semibold flex items-center gap-1.5">
+                      {selectedProvider === p.key && p.available && (
+                        <span className="h-1.5 w-1.5 rounded-full bg-primary shrink-0" />
+                      )}
+                      {p.label}
+                      {!p.available && (
+                        <span className="ml-1 text-[10px] bg-border/60 text-muted-foreground px-1.5 py-0.5 rounded">
+                          em breve
+                        </span>
+                      )}
+                    </span>
+                    <span className="text-xs opacity-60">{p.description}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="space-y-2">
               <Label>Tipo de evento</Label>
               <div className="flex gap-2 flex-wrap">
@@ -517,25 +566,47 @@ function Index() {
               </Label>
               <div className="flex flex-wrap gap-2">
                 {MARKET_OPTIONS.map((m) => {
-                  const active = selectedMarkets.includes(m.key);
-                  return (
+                  const provider = getProviderByKey(selectedProvider);
+                  const unsupported = provider.unsupportedMarketKeys.includes(m.key);
+                  const reason = provider.unsupportedReason[m.key];
+                  const active = !unsupported && selectedMarkets.includes(m.key);
+
+                  const btn = (
                     <button
                       key={m.key}
                       type="button"
                       onClick={() => handleMarketToggle(m.key)}
-                      className={`flex flex-col items-start px-4 py-2.5 rounded-md border text-sm transition-colors ${
-                        active
-                          ? "border-primary/60 bg-primary/10 text-foreground"
-                          : "border-border text-muted-foreground hover:bg-secondary"
+                      aria-disabled={unsupported}
+                      className={`flex flex-col items-start px-4 py-2.5 rounded-md border text-sm transition-colors text-left ${
+                        unsupported
+                          ? "border-border/40 text-muted-foreground/40 cursor-not-allowed select-none"
+                          : active
+                            ? "border-primary/60 bg-primary/10 text-foreground"
+                            : "border-border text-muted-foreground hover:bg-secondary"
                       }`}
                     >
                       <span className="font-semibold flex items-center gap-1.5">
                         {active && <span className="h-1.5 w-1.5 rounded-full bg-primary shrink-0" />}
                         {m.label}
+                        {unsupported && (
+                          <span className="text-[10px] bg-border/40 text-muted-foreground/60 px-1.5 py-0.5 rounded ml-1">
+                            indisponível
+                          </span>
+                        )}
                       </span>
-                      <span className="text-xs opacity-70">{m.description}</span>
+                      <span className="text-xs opacity-60">{m.description}</span>
                     </button>
                   );
+
+                  if (unsupported && reason) {
+                    return (
+                      <CssTooltip key={m.key} message={reason}>
+                        {btn}
+                      </CssTooltip>
+                    );
+                  }
+
+                  return <div key={m.key}>{btn}</div>;
                 })}
               </div>
             </div>
@@ -771,6 +842,20 @@ function BookieChip({ label, active, onToggle }: { label: string; active: boolea
       <Checkbox checked={active} onCheckedChange={onToggle} />
       <span className="font-medium">{label}</span>
     </label>
+  );
+}
+
+function CssTooltip({ message, children }: { message: string; children: ReactNode }) {
+  return (
+    <div className="relative group inline-block">
+      {children}
+      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block group-focus-within:block z-50 pointer-events-none">
+        <div className="bg-popover text-popover-foreground border border-border text-xs rounded-md px-3 py-2 shadow-lg w-72 whitespace-normal text-left leading-snug">
+          {message}
+        </div>
+        <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-border" />
+      </div>
+    </div>
   );
 }
 
