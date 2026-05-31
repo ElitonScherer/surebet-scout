@@ -13,6 +13,11 @@ import {
   StopCircle,
   Send,
   Timer,
+  Play,
+  Plus,
+  Server,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -88,6 +93,22 @@ const BRAZIL_BOOKMAKERS: BookmakerEntry[] = [
   { key: "bwin",          title: "Bwin",         br: true },
 ];
 
+interface BotConfig {
+  id: string;
+  token: string;
+  chatId: string;
+  duration: number;
+  running: boolean;
+  timeLeft: number;
+  sentCount: number;
+  error: string | null;
+  endTime: number | null;
+}
+
+function makeBotId() {
+  return Math.random().toString(36).slice(2, 8).toUpperCase();
+}
+
 function formatForTelegram(opp: SurebetOpportunity, investment: number): string {
   const date = new Date(opp.commenceTime).toLocaleString("pt-BR", {
     dateStyle: "short",
@@ -155,21 +176,18 @@ function Index() {
 
   // ── Telegram Bot ─────────────────────────────────────────────────────────
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [botToken, setBotToken] = useState("");
-  const [botChatId, setBotChatId] = useState("");
-  const [botDuration, setBotDuration] = useState<number>(60);
-  const [botRunning, setBotRunning] = useState(false);
-  const [botTimeLeft, setBotTimeLeft] = useState<number>(0);
-  const [botSentCount, setBotSentCount] = useState(0);
-  const [botError, setBotError] = useState<string | null>(null);
+  const [settingsProvider, setSettingsProvider] = useState<string>(DEFAULT_PROVIDER_KEY);
+  const [bots, setBots] = useState<BotConfig[]>([]);
+  const [creatingBot, setCreatingBot] = useState(false);
+  const [newBotToken, setNewBotToken] = useState("");
+  const [newBotChatId, setNewBotChatId] = useState("");
+  const [newBotDuration, setNewBotDuration] = useState<number>(60);
+  const [newBotError, setNewBotError] = useState<string | null>(null);
+  const [expandedBotId, setExpandedBotId] = useState<string | null>(null);
+  const botsRef = useRef<BotConfig[]>([]);
+  useEffect(() => { botsRef.current = bots; }, [bots]);
 
-  const botEndTimeRef = useRef<number | null>(null);
-  const latestRef = useRef({
-    sport, eventType, selectedMarkets, selectedBookies, investment, botToken, botChatId,
-  });
-  useEffect(() => {
-    latestRef.current = { sport, eventType, selectedMarkets, selectedBookies, investment, botToken, botChatId };
-  });
+
 
   // ── Load sports ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -308,79 +326,118 @@ function Index() {
     }
   };
 
-  // ── Telegram Bot ─────────────────────────────────────────────────────────
-  const stopBot = () => {
-    setBotRunning(false);
-    botEndTimeRef.current = null;
+  // ── Telegram Bot (multi) ─────────────────────────────────────────────────
+  const stopBot = (id: string) => {
+    setBots((prev) => prev.map((b) => b.id === id ? { ...b, running: false, endTime: null } : b));
   };
 
-  useEffect(() => {
-    if (!botRunning) return;
+  const resumeBot = (id: string) => {
+    setBots((prev) => prev.map((b) => {
+      if (b.id !== id) return b;
+      const endTime = b.duration > 0 ? Date.now() + b.duration * 60 * 1000 : null;
+      return { ...b, running: true, endTime, timeLeft: b.duration * 60, error: null };
+    }));
+  };
 
-    const tick = async () => {
-      const p = latestRef.current;
-      const apiMarkets = buildApiMarketsParam(p.selectedMarkets);
-      try {
-        const { events } = await fetchOdds({
-          data: {
-            sportKey: p.sport,
-            eventType: p.eventType,
-            market: apiMarkets,
-            bookmakers: p.selectedBookies.join(","),
-          },
-        });
-        const opps = p.selectedMarkets.flatMap((key) =>
-          findOpportunities(events as SportEvent[], p.selectedBookies, p.investment, "all", getMarketByKey(key)),
-        );
-        opps.sort((a, b) => b.profitPercent - a.profitPercent);
-        for (const opp of opps) {
-          const msg = formatForTelegram(opp, p.investment);
-          await sendTelegram({ data: { token: p.botToken, chatId: p.botChatId, message: msg } });
+  // Per-bot tick effect — runs whenever bots list changes
+  useEffect(() => {
+    const runningBots = bots.filter((b) => b.running);
+    if (runningBots.length === 0) return;
+
+    const intervals: ReturnType<typeof setInterval>[] = [];
+
+    for (const bot of runningBots) {
+      const tick = async () => {
+        const current = botsRef.current.find((b) => b.id === bot.id);
+        if (!current?.running) return;
+
+        const apiMarkets = buildApiMarketsParam(selectedMarkets);
+        try {
+          const { events } = await fetchOdds({
+            data: {
+              sportKey: sport,
+              eventType,
+              market: apiMarkets,
+              bookmakers: selectedBookies.join(","),
+            },
+          });
+          const opps = selectedMarkets.flatMap((key) =>
+            findOpportunities(events as SportEvent[], selectedBookies, investment, "all", getMarketByKey(key)),
+          );
+          opps.sort((a, b) => b.profitPercent - a.profitPercent);
+          for (const opp of opps) {
+            const msg = formatForTelegram(opp, investment);
+            await sendTelegram({ data: { token: current.token, chatId: current.chatId, message: msg } });
+          }
+          setBots((prev) => prev.map((b) =>
+            b.id === current.id ? { ...b, sentCount: b.sentCount + opps.length, error: null } : b,
+          ));
+        } catch (e) {
+          setBots((prev) => prev.map((b) =>
+            b.id === current.id ? { ...b, error: e instanceof Error ? e.message : "Erro no bot." } : b,
+          ));
         }
-        if (opps.length > 0) setBotSentCount((n) => n + opps.length);
-        setBotError(null);
-      } catch (e) {
-        setBotError(e instanceof Error ? e.message : "Erro no bot.");
-      }
 
-      if (botEndTimeRef.current && Date.now() >= botEndTimeRef.current) {
-        setBotRunning(false);
-      }
-    };
+        // Check expiry
+        setBots((prev) => prev.map((b) => {
+          if (b.id !== current.id || !b.endTime) return b;
+          if (Date.now() >= b.endTime) return { ...b, running: false, endTime: null };
+          return b;
+        }));
+      };
 
-    tick();
-    const id = setInterval(tick, 60_000);
-    return () => clearInterval(id);
-  }, [botRunning, fetchOdds, sendTelegram]);
+      tick();
+      intervals.push(setInterval(tick, 60_000));
+    }
 
-  // Countdown timer
+    return () => intervals.forEach(clearInterval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bots.map((b) => `${b.id}:${b.running}`).join(",")]);
+
+  // Countdown timers
   useEffect(() => {
-    if (!botRunning || !botEndTimeRef.current) return;
+    const hasRunning = bots.some((b) => b.running && b.endTime !== null);
+    if (!hasRunning) return;
     const id = setInterval(() => {
-      const left = Math.max(0, Math.ceil(((botEndTimeRef.current ?? 0) - Date.now()) / 1000));
-      setBotTimeLeft(left);
-      if (left <= 0) setBotRunning(false);
+      setBots((prev) => prev.map((b) => {
+        if (!b.running || !b.endTime) return b;
+        const left = Math.max(0, Math.ceil((b.endTime - Date.now()) / 1000));
+        if (left <= 0) return { ...b, running: false, endTime: null, timeLeft: 0 };
+        return { ...b, timeLeft: left };
+      }));
     }, 1000);
     return () => clearInterval(id);
-  }, [botRunning]);
+  }, [bots]);
 
-  const startBot = () => {
-    if (!botToken || !botChatId) {
-      setBotError("Preencha o Token do Bot e o Chat ID antes de iniciar.");
+  const createBot = () => {
+    if (!newBotToken || !newBotChatId) {
+      setNewBotError("Preencha o Token e o Chat ID.");
       return;
     }
-    setBotError(null);
-    setBotSentCount(0);
-    if (botDuration > 0) {
-      botEndTimeRef.current = Date.now() + botDuration * 60 * 1000;
-      setBotTimeLeft(botDuration * 60);
-    } else {
-      botEndTimeRef.current = null;
-      setBotTimeLeft(0);
-    }
-    setBotRunning(true);
-    setSettingsOpen(false);
+    const id = makeBotId();
+    const endTime = newBotDuration > 0 ? Date.now() + newBotDuration * 60 * 1000 : null;
+    const newBot: BotConfig = {
+      id,
+      token: newBotToken,
+      chatId: newBotChatId,
+      duration: newBotDuration,
+      running: true,
+      timeLeft: newBotDuration * 60,
+      sentCount: 0,
+      error: null,
+      endTime,
+    };
+    setBots((prev) => [...prev, newBot]);
+    setNewBotToken("");
+    setNewBotChatId("");
+    setNewBotDuration(60);
+    setNewBotError(null);
+    setCreatingBot(false);
   };
+
+  const anyBotRunning = bots.some((b) => b.running);
+
+
 
   return (
     <div className="min-h-screen">
@@ -397,11 +454,10 @@ function Index() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {botRunning && (
+            {anyBotRunning && (
               <Badge className="gap-1.5 bg-green-500/20 text-green-400 border-green-500/40 animate-pulse">
                 <Bot className="h-3 w-3" />
-                Bot ativo · {botSentCount} enviados
-                {botEndTimeRef.current ? ` · ${formatTime(botTimeLeft)}` : ""}
+                {bots.filter((b) => b.running).length} bot{bots.filter((b) => b.running).length > 1 ? "s" : ""} ativo{bots.filter((b) => b.running).length > 1 ? "s" : ""} · {bots.reduce((a, b) => a + b.sentCount, 0)} enviados
               </Badge>
             )}
             {remaining && (
@@ -474,48 +530,15 @@ function Index() {
           </CardContent>
         </Card>
 
-        {/* Step 2 — Servidor, tipo de evento e Liga */}
+        {/* Step 2 — Tipo de evento e liga */}
         <Card className="border-border/60 shadow-xl">
           <CardHeader className="pb-3">
             <CardTitle className="text-base flex items-center gap-2">
               <StepBadge n={2} />
-              Servidor, tipo de evento e liga
+              Tipo de evento e liga
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label>Servidor de dados</Label>
-              <div className="flex flex-wrap gap-2">
-                {PROVIDERS.map((p) => (
-                  <button
-                    key={p.key}
-                    type="button"
-                    disabled={!p.available}
-                    onClick={() => p.available && handleProviderChange(p.key)}
-                    className={`flex flex-col items-start px-4 py-2.5 rounded-md border text-sm transition-colors text-left ${
-                      !p.available
-                        ? "border-border/40 text-muted-foreground/40 cursor-not-allowed opacity-50"
-                        : selectedProvider === p.key
-                          ? "border-primary/60 bg-primary/10 text-foreground"
-                          : "border-border text-muted-foreground hover:bg-secondary"
-                    }`}
-                  >
-                    <span className="font-semibold flex items-center gap-1.5">
-                      {selectedProvider === p.key && p.available && (
-                        <span className="h-1.5 w-1.5 rounded-full bg-primary shrink-0" />
-                      )}
-                      {p.label}
-                      {!p.available && (
-                        <span className="ml-1 text-[10px] bg-border/60 text-muted-foreground px-1.5 py-0.5 rounded">
-                          em breve
-                        </span>
-                      )}
-                    </span>
-                    <span className="text-xs opacity-60">{p.description}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
             <div className="space-y-2">
               <Label>Tipo de evento</Label>
               <div className="flex gap-2 flex-wrap">
@@ -706,103 +729,259 @@ function Index() {
       </main>
 
       {/* Settings Dialog */}
-      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
-        <DialogContent className="max-w-md">
+      <Dialog open={settingsOpen} onOpenChange={(open) => { setSettingsOpen(open); if (!open) setCreatingBot(false); }}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Bot className="h-5 w-5 text-primary" />
-              Configurar Bot do Telegram
+              <Settings className="h-5 w-5 text-primary" />
+              Configurações
             </DialogTitle>
             <DialogDescription>
-              O bot busca surebets a cada 1 minuto e envia alertas no Telegram enquanto estiver ativo.
+              Gerencie o servidor de dados e os bots do Telegram.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4 pt-2">
-            <div className="space-y-2">
-              <Label htmlFor="bot-token">Token do Bot</Label>
-              <Input
-                id="bot-token"
-                type="password"
-                placeholder="123456789:AAFxxxxxxxxxxxxxxxxxxxxxxxx"
-                value={botToken}
-                onChange={(e) => setBotToken(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">
-                Crie um bot com <span className="font-medium text-foreground">@BotFather</span> no Telegram para obter o token.
-              </p>
-            </div>
+          <div className="space-y-6 pt-2">
 
-            <div className="space-y-2">
-              <Label htmlFor="bot-chat">Chat ID</Label>
-              <Input
-                id="bot-chat"
-                placeholder="-1001234567890 ou @seucanal"
-                value={botChatId}
-                onChange={(e) => setBotChatId(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">
-                ID do chat, grupo ou canal para receber os alertas.
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Duração do bot</Label>
-              <div className="flex gap-2 flex-wrap">
-                {[
-                  { value: 30,  label: "30 min" },
-                  { value: 60,  label: "1 hora" },
-                  { value: 120, label: "2 horas" },
-                  { value: 0,   label: "∞ Ilimitado" },
-                ].map(({ value, label }) => (
-                  <FilterChip
-                    key={value}
-                    label={label}
-                    active={botDuration === value}
-                    onClick={() => setBotDuration(value)}
-                  />
+            {/* ── Servidor de dados ── */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Server className="h-4 w-4 text-primary" />
+                <h3 className="text-sm font-semibold">Servidor de dados</h3>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {PROVIDERS.map((p) => (
+                  <button
+                    key={p.key}
+                    type="button"
+                    disabled={!p.available}
+                    onClick={() => p.available && handleProviderChange(p.key)}
+                    className={`flex flex-col items-start px-4 py-2.5 rounded-md border text-sm transition-colors text-left ${
+                      !p.available
+                        ? "border-border/40 text-muted-foreground/40 cursor-not-allowed opacity-50"
+                        : selectedProvider === p.key
+                          ? "border-primary/60 bg-primary/10 text-foreground"
+                          : "border-border text-muted-foreground hover:bg-secondary"
+                    }`}
+                  >
+                    <span className="font-semibold flex items-center gap-1.5">
+                      {selectedProvider === p.key && p.available && (
+                        <span className="h-1.5 w-1.5 rounded-full bg-primary shrink-0" />
+                      )}
+                      {p.label}
+                      {!p.available && (
+                        <span className="ml-1 text-[10px] bg-border/60 text-muted-foreground px-1.5 py-0.5 rounded">
+                          em breve
+                        </span>
+                      )}
+                    </span>
+                    <span className="text-xs opacity-60">{p.description}</span>
+                  </button>
                 ))}
               </div>
             </div>
 
-            {botError && (
-              <div className="flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                <AlertCircle className="h-4 w-4 shrink-0" />
-                {botError}
-              </div>
-            )}
+            <div className="border-t border-border/40" />
 
-            {botRunning && (
-              <div className="flex items-center gap-2 rounded-md border border-green-500/40 bg-green-500/10 px-3 py-2 text-sm text-green-400">
-                <Timer className="h-4 w-4 shrink-0" />
-                <span>
-                  Bot ativo · <b>{botSentCount}</b> alertas enviados
-                  {botEndTimeRef.current ? ` · restam ${formatTime(botTimeLeft)}` : ""}
-                </span>
+            {/* ── Bots do Telegram ── */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Bot className="h-4 w-4 text-primary" />
+                  <h3 className="text-sm font-semibold">Bots do Telegram</h3>
+                  {bots.length > 0 && (
+                    <Badge variant="outline" className="text-xs border-border/60">
+                      {bots.length} bot{bots.length > 1 ? "s" : ""}
+                    </Badge>
+                  )}
+                </div>
+                {!creatingBot && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 gap-1 text-xs border-primary/40 text-primary hover:bg-primary/10"
+                    onClick={() => setCreatingBot(true)}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Novo bot
+                  </Button>
+                )}
               </div>
-            )}
 
-            <div className="flex gap-2 pt-1">
-              {botRunning ? (
-                <Button variant="destructive" className="flex-1" onClick={stopBot}>
-                  <StopCircle className="h-4 w-4" />
-                  Parar Bot
-                </Button>
-              ) : (
-                <Button
-                  className="flex-1 bg-[image:var(--gradient-profit)] text-primary-foreground hover:opacity-90"
-                  onClick={startBot}
-                  disabled={!botToken || !botChatId}
-                >
-                  <Send className="h-4 w-4" />
-                  Iniciar Bot
-                </Button>
+              {/* Bot list */}
+              {bots.length === 0 && !creatingBot && (
+                <div className="rounded-md border border-dashed border-border/60 py-6 text-center text-sm text-muted-foreground">
+                  Nenhum bot criado. Clique em <span className="text-foreground font-medium">Novo bot</span> para começar.
+                </div>
               )}
-            </div>
 
-            <p className="text-xs text-muted-foreground">
-              O bot usa as configurações de casas, esporte e mercado da tela principal. Mantenha a aba aberta enquanto o bot estiver rodando.
-            </p>
+              {bots.map((bot) => (
+                <div
+                  key={bot.id}
+                  className={`rounded-md border px-4 py-3 space-y-2 transition-colors ${
+                    bot.running
+                      ? "border-green-500/40 bg-green-500/5"
+                      : "border-border/60 bg-secondary/30"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span
+                        className={`h-2 w-2 rounded-full shrink-0 ${bot.running ? "bg-green-400 animate-pulse" : "bg-border"}`}
+                      />
+                      <span className="text-xs font-mono font-semibold text-muted-foreground">#{bot.id}</span>
+                      <span className="text-sm font-medium truncate">{bot.chatId}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {bot.running ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 gap-1 text-xs border-destructive/40 text-destructive hover:bg-destructive/10"
+                          onClick={() => stopBot(bot.id)}
+                        >
+                          <StopCircle className="h-3.5 w-3.5" />
+                          Parar
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 gap-1 text-xs border-green-500/40 text-green-400 hover:bg-green-500/10"
+                          onClick={() => resumeBot(bot.id)}
+                        >
+                          <Play className="h-3.5 w-3.5" />
+                          Retomar
+                        </Button>
+                      )}
+                      <button
+                        type="button"
+                        className="text-xs text-muted-foreground hover:text-foreground"
+                        onClick={() => setExpandedBotId(expandedBotId === bot.id ? null : bot.id)}
+                      >
+                        {expandedBotId === bot.id ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Status row */}
+                  <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+                    {bot.running ? (
+                      <>
+                        <span className="text-green-400 font-medium flex items-center gap-1">
+                          <Timer className="h-3 w-3" />
+                          {bot.endTime ? `Restam ${formatTime(bot.timeLeft)}` : "Ilimitado"}
+                        </span>
+                        <span>{bot.sentCount} alertas enviados</span>
+                      </>
+                    ) : (
+                      <span className="text-muted-foreground/60">Inativo · {bot.sentCount} alertas enviados</span>
+                    )}
+                    {bot.duration > 0 && (
+                      <span>Duração: {bot.duration < 60 ? `${bot.duration} min` : `${bot.duration / 60}h`}</span>
+                    )}
+                  </div>
+
+                  {/* Expanded details */}
+                  {expandedBotId === bot.id && (
+                    <div className="pt-1 space-y-1 text-xs text-muted-foreground border-t border-border/40 mt-2">
+                      <div>Chat ID: <span className="text-foreground font-medium">{bot.chatId}</span></div>
+                      <div>Token: <span className="font-mono text-foreground/70">{"•".repeat(12)}{bot.token.slice(-6)}</span></div>
+                    </div>
+                  )}
+
+                  {bot.error && (
+                    <div className="flex items-center gap-1.5 rounded border border-destructive/40 bg-destructive/10 px-2.5 py-1.5 text-xs text-destructive">
+                      <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                      {bot.error}
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              {/* Create bot form */}
+              {creatingBot && (
+                <div className="rounded-md border border-primary/30 bg-primary/5 p-4 space-y-3">
+                  <p className="text-sm font-semibold">Novo bot</p>
+
+                  <div className="space-y-1.5">
+                    <Label htmlFor="new-bot-token" className="text-xs">Token do Bot</Label>
+                    <Input
+                      id="new-bot-token"
+                      type="password"
+                      placeholder="123456789:AAFxxxxxxxxxxxxxxxxxxxxxxxx"
+                      value={newBotToken}
+                      onChange={(e) => setNewBotToken(e.target.value)}
+                      className="h-8 text-sm"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Obtenha via <span className="font-medium text-foreground">@BotFather</span> no Telegram.
+                    </p>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label htmlFor="new-bot-chat" className="text-xs">Chat ID</Label>
+                    <Input
+                      id="new-bot-chat"
+                      placeholder="-1001234567890 ou @seucanal"
+                      value={newBotChatId}
+                      onChange={(e) => setNewBotChatId(e.target.value)}
+                      className="h-8 text-sm"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Duração</Label>
+                    <div className="flex gap-1.5 flex-wrap">
+                      {[
+                        { value: 30,  label: "30 min" },
+                        { value: 60,  label: "1h" },
+                        { value: 120, label: "2h" },
+                        { value: 0,   label: "∞" },
+                      ].map(({ value, label }) => (
+                        <FilterChip
+                          key={value}
+                          label={label}
+                          active={newBotDuration === value}
+                          onClick={() => setNewBotDuration(value)}
+                        />
+                      ))}
+                    </div>
+                  </div>
+
+                  {newBotError && (
+                    <div className="flex items-center gap-1.5 rounded border border-destructive/40 bg-destructive/10 px-2.5 py-1.5 text-xs text-destructive">
+                      <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                      {newBotError}
+                    </div>
+                  )}
+
+                  <div className="flex gap-2 pt-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-1 h-8 text-xs"
+                      onClick={() => { setCreatingBot(false); setNewBotError(null); }}
+                    >
+                      Cancelar
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="flex-1 h-8 text-xs bg-[image:var(--gradient-profit)] text-primary-foreground hover:opacity-90"
+                      onClick={createBot}
+                      disabled={!newBotToken || !newBotChatId}
+                    >
+                      <Send className="h-3.5 w-3.5" />
+                      Criar e iniciar
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              <p className="text-xs text-muted-foreground">
+                Os bots usam as configurações de casas, esporte e mercado da tela principal. Mantenha a aba aberta enquanto estiverem ativos.
+              </p>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
