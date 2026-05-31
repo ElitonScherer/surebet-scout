@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useMemo, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import {
   TrendingUp,
@@ -8,6 +8,11 @@ import {
   AlertCircle,
   Sparkles,
   Trophy,
+  Settings,
+  Bot,
+  StopCircle,
+  Send,
+  Timer,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -25,9 +30,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 
 import { getOdds, getSports, type SportInfo, type EventType } from "@/lib/surebet/odds.functions";
 import { findOpportunities } from "@/lib/surebet/calc";
+import { MARKET_OPTIONS, getMarketByKey } from "@/lib/surebet/markets";
+import { sendTelegramMessage } from "@/lib/telegram.server";
 import type { SurebetOpportunity, SportEvent } from "@/lib/surebet/types";
 
 export const Route = createFileRoute("/")({
@@ -37,13 +51,7 @@ export const Route = createFileRoute("/")({
       {
         name: "description",
         content:
-          "Encontre oportunidades reais de arbitragem esportiva com lucro garantido. Compara odds entre dezenas de casas de aposta via The Odds API.",
-      },
-      { property: "og:title", content: "Surebet Finder — Arbitragem Esportiva" },
-      {
-        property: "og:description",
-        content:
-          "Oportunidades reais de surebet com odds ao vivo via The Odds API.",
+          "Encontre oportunidades reais de arbitragem esportiva com lucro garantido.",
       },
     ],
   }),
@@ -65,37 +73,75 @@ interface BookmakerEntry {
 }
 
 const BRAZIL_BOOKMAKERS: BookmakerEntry[] = [
-  { key: "betano",          title: "Betano",       br: true },
-  { key: "superbet",        title: "Superbet",     br: true },
-  { key: "pinnacle",        title: "Pinnacle",     br: true },
-  { key: "betfair_ex_eu",   title: "Betfair",      br: true },
-  { key: "betmgm",          title: "BetMGM",       br: true },
-  { key: "bet365",          title: "Bet365",       br: true },
-  { key: "sportingbet",     title: "Sportingbet",  br: true },
-  { key: "novibet",         title: "Novibet",      br: true },
-  { key: "unibet_eu",       title: "Unibet",       br: true },
-  { key: "williamhill",     title: "William Hill", br: true },
-  { key: "1xbet",           title: "1xBet",        br: true },
-  { key: "bwin",            title: "Bwin",         br: true },
+  { key: "betano",        title: "Betano",       br: true },
+  { key: "superbet",      title: "Superbet",     br: true },
+  { key: "pinnacle",      title: "Pinnacle",     br: true },
+  { key: "betfair_ex_eu", title: "Betfair",      br: true },
+  { key: "betmgm",        title: "BetMGM",       br: true },
+  { key: "bet365",        title: "Bet365",       br: true },
+  { key: "sportingbet",   title: "Sportingbet",  br: true },
+  { key: "novibet",       title: "Novibet",      br: true },
+  { key: "unibet_eu",     title: "Unibet",       br: true },
+  { key: "williamhill",   title: "William Hill", br: true },
+  { key: "1xbet",         title: "1xBet",        br: true },
+  { key: "bwin",          title: "Bwin",         br: true },
 ];
 
-const BR_KEYS = new Set(BRAZIL_BOOKMAKERS.map((b) => b.key));
+function formatForTelegram(opp: SurebetOpportunity, investment: number): string {
+  const date = new Date(opp.commenceTime).toLocaleString("pt-BR", {
+    dateStyle: "short",
+    timeStyle: "short",
+  });
+  const stakes = opp.stakes
+    .map((s) => `• ${s.name} @ ${s.price.toFixed(2)} — <b>${s.bookmaker}</b> → ${currency(s.stake)}`)
+    .join("\n");
+
+  return [
+    `🎯 <b>SUREBET ENCONTRADA!</b>`,
+    ``,
+    `⚽ ${opp.sport} | ${opp.marketLabel}`,
+    `🏟️ <b>${opp.homeTeam}</b> vs <b>${opp.awayTeam}</b>`,
+    `📅 ${date}`,
+    ``,
+    `💰 Lucro: <b>+${opp.profitPercent.toFixed(2)}%</b> (${currency(opp.profitValue)})`,
+    `💵 Investimento: ${currency(investment)}`,
+    ``,
+    `📌 <b>Apostas:</b>`,
+    stakes,
+  ].join("\n");
+}
+
+function formatTime(seconds: number): string {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  if (h > 0) return `${h}h ${m.toString().padStart(2, "0")}m`;
+  if (m > 0) return `${m}m ${s.toString().padStart(2, "0")}s`;
+  return `${s}s`;
+}
 
 function Index() {
-  const fetchSports = useServerFn(getSports);
   const fetchOdds = useServerFn(getOdds);
+  const fetchSports = useServerFn(getSports);
+  const sendTelegram = useServerFn(sendTelegramMessage);
 
-  const [investment, setInvestment] = useState<number>(1000);
-  const [sport, setSport] = useState<string>("upcoming");
-  const [sports, setSports] = useState<SportInfo[]>([]);
-  const [loadingSports, setLoadingSports] = useState(true);
-
+  // ── Bookmakers ──────────────────────────────────────────────────────────
   const [bookmakerList, setBookmakerList] = useState<BookmakerEntry[]>(BRAZIL_BOOKMAKERS);
   const [selectedBookies, setSelectedBookies] = useState<string[]>(
     BRAZIL_BOOKMAKERS.map((b) => b.key),
   );
 
+  // ── Event type & sport ───────────────────────────────────────────────────
   const [eventType, setEventType] = useState<EventType>("all");
+  const [sport, setSport] = useState<string>("upcoming");
+  const [sports, setSports] = useState<SportInfo[]>([]);
+  const [loadingSports, setLoadingSports] = useState(true);
+
+  // ── Market ───────────────────────────────────────────────────────────────
+  const [marketKey, setMarketKey] = useState<string>("h2h");
+
+  // ── Investment & search ──────────────────────────────────────────────────
+  const [investment, setInvestment] = useState<number>(1000);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<SurebetOpportunity[] | null>(null);
@@ -103,6 +149,25 @@ function Index() {
   const [lastEventCount, setLastEventCount] = useState<number>(0);
   const [rawEvents, setRawEvents] = useState<SportEvent[]>([]);
 
+  // ── Telegram Bot ─────────────────────────────────────────────────────────
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [botToken, setBotToken] = useState("");
+  const [botChatId, setBotChatId] = useState("");
+  const [botDuration, setBotDuration] = useState<number>(60);
+  const [botRunning, setBotRunning] = useState(false);
+  const [botTimeLeft, setBotTimeLeft] = useState<number>(0);
+  const [botSentCount, setBotSentCount] = useState(0);
+  const [botError, setBotError] = useState<string | null>(null);
+
+  const botEndTimeRef = useRef<number | null>(null);
+  const latestRef = useRef({
+    sport, eventType, marketKey, selectedBookies, investment, botToken, botChatId,
+  });
+  useEffect(() => {
+    latestRef.current = { sport, eventType, marketKey, selectedBookies, investment, botToken, botChatId };
+  });
+
+  // ── Load sports ──────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
     fetchSports()
@@ -128,59 +193,13 @@ function Index() {
     [results],
   );
 
-  const toggleBookie = (key: string) => {
-    setSelectedBookies((prev) =>
-      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
-    );
-  };
+  // ── Bookmaker helpers ────────────────────────────────────────────────────
+  const brBookmakers = bookmakerList.filter((b) => b.br);
+  const otherBookmakers = bookmakerList.filter((b) => !b.br);
 
-  const recompute = (events: SportEvent[], selection: string[]) => {
-    const opps = findOpportunities(events, selection, investment, "all");
-    setResults(opps);
-  };
-
-  const handleSearch = async () => {
-    setError(null);
-    setLoading(true);
-    try {
-      if (!investment || investment <= 0) {
-        throw new Error("Informe um valor de investimento válido.");
-      }
-
-      const { events, remaining: rem } = await fetchOdds({
-        data: { sportKey: sport, eventType },
-      });
-      setRemaining(rem);
-      setLastEventCount(events.length);
-      setRawEvents(events as SportEvent[]);
-
-      const bmMap = new Map<string, string>();
-      for (const ev of events as SportEvent[]) {
-        for (const bm of ev.bookmakers) bmMap.set(bm.key, bm.title);
-      }
-
-      const merged = new Map<string, BookmakerEntry>();
-      for (const b of BRAZIL_BOOKMAKERS) merged.set(b.key, b);
-      for (const [key, title] of bmMap.entries()) {
-        if (!merged.has(key)) merged.set(key, { key, title, br: false });
-      }
-
-      const sortedList = Array.from(merged.values()).sort((a, b) => {
-        if (a.br && !b.br) return -1;
-        if (!a.br && b.br) return 1;
-        return a.title.localeCompare(b.title);
-      });
-
-      setBookmakerList(sortedList);
-
-      const opps = findOpportunities(events, selectedBookies, investment, "all");
-      setResults(opps);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Erro inesperado.");
-      setResults(null);
-    } finally {
-      setLoading(false);
-    }
+  const recompute = (events: SportEvent[], selection: string[], mKey = marketKey) => {
+    const spec = getMarketByKey(mKey);
+    setResults(findOpportunities(events, selection, investment, "all", spec));
   };
 
   const handleBookieToggle = (key: string) => {
@@ -196,23 +215,131 @@ function Index() {
     setSelectedBookies(all);
     if (rawEvents.length > 0) recompute(rawEvents, all);
   };
-
   const handleClearAll = () => {
     setSelectedBookies([]);
     if (rawEvents.length > 0) recompute(rawEvents, []);
   };
-
   const handleSelectBrOnly = () => {
     const brOnly = bookmakerList.filter((b) => b.br).map((b) => b.key);
     setSelectedBookies(brOnly);
     if (rawEvents.length > 0) recompute(rawEvents, brOnly);
   };
 
-  const brBookmakers = bookmakerList.filter((b) => b.br);
-  const otherBookmakers = bookmakerList.filter((b) => !b.br);
+  // ── Market change ────────────────────────────────────────────────────────
+  const handleMarketChange = (key: string) => {
+    setMarketKey(key);
+    if (rawEvents.length > 0) recompute(rawEvents, selectedBookies, key);
+  };
+
+  // ── Search ───────────────────────────────────────────────────────────────
+  const handleSearch = async () => {
+    setError(null);
+    setLoading(true);
+    try {
+      if (!investment || investment <= 0) throw new Error("Informe um valor de investimento válido.");
+
+      const spec = getMarketByKey(marketKey);
+      const { events, remaining: rem } = await fetchOdds({
+        data: { sportKey: sport, eventType, market: spec.apiMarket },
+      });
+      setRemaining(rem);
+      setLastEventCount(events.length);
+      setRawEvents(events as SportEvent[]);
+
+      const bmMap = new Map<string, string>();
+      for (const ev of events as SportEvent[])
+        for (const bm of ev.bookmakers) bmMap.set(bm.key, bm.title);
+
+      const merged = new Map<string, BookmakerEntry>();
+      for (const b of BRAZIL_BOOKMAKERS) merged.set(b.key, b);
+      for (const [key, title] of bmMap.entries())
+        if (!merged.has(key)) merged.set(key, { key, title, br: false });
+
+      const sortedList = Array.from(merged.values()).sort((a, b) => {
+        if (a.br && !b.br) return -1;
+        if (!a.br && b.br) return 1;
+        return a.title.localeCompare(b.title);
+      });
+      setBookmakerList(sortedList);
+
+      setResults(findOpportunities(events as SportEvent[], selectedBookies, investment, "all", spec));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erro inesperado.");
+      setResults(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ── Telegram Bot ─────────────────────────────────────────────────────────
+  const stopBot = () => {
+    setBotRunning(false);
+    botEndTimeRef.current = null;
+  };
+
+  useEffect(() => {
+    if (!botRunning) return;
+
+    const tick = async () => {
+      const p = latestRef.current;
+      const spec = getMarketByKey(p.marketKey);
+      try {
+        const { events } = await fetchOdds({
+          data: { sportKey: p.sport, eventType: p.eventType, market: spec.apiMarket },
+        });
+        const opps = findOpportunities(events as SportEvent[], p.selectedBookies, p.investment, "all", spec);
+        for (const opp of opps) {
+          const msg = formatForTelegram(opp, p.investment);
+          await sendTelegram({ data: { token: p.botToken, chatId: p.botChatId, message: msg } });
+        }
+        if (opps.length > 0) setBotSentCount((n) => n + opps.length);
+        setBotError(null);
+      } catch (e) {
+        setBotError(e instanceof Error ? e.message : "Erro no bot.");
+      }
+
+      if (botEndTimeRef.current && Date.now() >= botEndTimeRef.current) {
+        setBotRunning(false);
+      }
+    };
+
+    tick();
+    const id = setInterval(tick, 60_000);
+    return () => clearInterval(id);
+  }, [botRunning, fetchOdds, sendTelegram]);
+
+  // Countdown timer
+  useEffect(() => {
+    if (!botRunning || !botEndTimeRef.current) return;
+    const id = setInterval(() => {
+      const left = Math.max(0, Math.ceil(((botEndTimeRef.current ?? 0) - Date.now()) / 1000));
+      setBotTimeLeft(left);
+      if (left <= 0) setBotRunning(false);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [botRunning]);
+
+  const startBot = () => {
+    if (!botToken || !botChatId) {
+      setBotError("Preencha o Token do Bot e o Chat ID antes de iniciar.");
+      return;
+    }
+    setBotError(null);
+    setBotSentCount(0);
+    if (botDuration > 0) {
+      botEndTimeRef.current = Date.now() + botDuration * 60 * 1000;
+      setBotTimeLeft(botDuration * 60);
+    } else {
+      botEndTimeRef.current = null;
+      setBotTimeLeft(0);
+    }
+    setBotRunning(true);
+    setSettingsOpen(false);
+  };
 
   return (
     <div className="min-h-screen">
+      {/* Header */}
       <header className="border-b border-border/60 backdrop-blur-md sticky top-0 z-10 bg-background/70">
         <div className="mx-auto max-w-7xl px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
@@ -225,6 +352,13 @@ function Index() {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {botRunning && (
+              <Badge className="gap-1.5 bg-green-500/20 text-green-400 border-green-500/40 animate-pulse">
+                <Bot className="h-3 w-3" />
+                Bot ativo · {botSentCount} enviados
+                {botEndTimeRef.current ? ` · ${formatTime(botTimeLeft)}` : ""}
+              </Badge>
+            )}
             {remaining && (
               <Badge variant="outline" className="border-border/60 text-muted-foreground">
                 {remaining} req restantes
@@ -234,42 +368,33 @@ function Index() {
               <Sparkles className="h-3 w-3" />
               The Odds API
             </Badge>
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-8 w-8 border-border/60"
+              onClick={() => setSettingsOpen(true)}
+              title="Configurações do Bot"
+            >
+              <Settings className="h-4 w-4" />
+            </Button>
           </div>
         </div>
       </header>
 
       <main className="mx-auto max-w-7xl px-6 py-8 space-y-6">
 
-        {/* Step 1 — Casas de aposta */}
+        {/* Step 1 — Casas */}
         <Card className="border-border/60 shadow-xl">
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <CardTitle className="text-base flex items-center gap-2">
-                <span className="h-5 w-5 rounded-full bg-primary text-primary-foreground text-xs flex items-center justify-center font-bold">1</span>
+                <StepBadge n={1} />
                 Casas de aposta
               </CardTitle>
               <div className="flex gap-3 text-xs">
-                <button
-                  type="button"
-                  className="text-primary hover:text-primary/80 font-medium"
-                  onClick={handleSelectBrOnly}
-                >
-                  Só Brasil
-                </button>
-                <button
-                  type="button"
-                  className="text-muted-foreground hover:text-foreground"
-                  onClick={handleSelectAll}
-                >
-                  Todas
-                </button>
-                <button
-                  type="button"
-                  className="text-muted-foreground hover:text-foreground"
-                  onClick={handleClearAll}
-                >
-                  Limpar
-                </button>
+                <button type="button" className="text-primary hover:text-primary/80 font-medium" onClick={handleSelectBrOnly}>Só Brasil</button>
+                <button type="button" className="text-muted-foreground hover:text-foreground" onClick={handleSelectAll}>Todas</button>
+                <button type="button" className="text-muted-foreground hover:text-foreground" onClick={handleClearAll}>Limpar</button>
               </div>
             </div>
           </CardHeader>
@@ -280,148 +405,130 @@ function Index() {
                 <span className="ml-1">· {selectedBookies.filter((k) => brBookmakers.some((b) => b.key === k)).length}/{brBookmakers.length} selecionadas</span>
               </p>
               <div className="flex flex-wrap gap-2">
-                {brBookmakers.map((bm) => {
-                  const active = selectedBookies.includes(bm.key);
-                  return (
-                    <BookieChip
-                      key={bm.key}
-                      label={bm.title}
-                      active={active}
-                      onToggle={() => handleBookieToggle(bm.key)}
-                    />
-                  );
-                })}
+                {brBookmakers.map((bm) => (
+                  <BookieChip key={bm.key} label={bm.title} active={selectedBookies.includes(bm.key)} onToggle={() => handleBookieToggle(bm.key)} />
+                ))}
               </div>
             </div>
-
             {otherBookmakers.length > 0 && (
               <div>
-                <p className="text-xs text-muted-foreground mb-2">
-                  Outras casas disponíveis na busca
-                </p>
+                <p className="text-xs text-muted-foreground mb-2">Outras casas disponíveis</p>
                 <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto pr-1">
-                  {otherBookmakers.map((bm) => {
-                    const active = selectedBookies.includes(bm.key);
-                    return (
-                      <BookieChip
-                        key={bm.key}
-                        label={bm.title}
-                        active={active}
-                        onToggle={() => handleBookieToggle(bm.key)}
-                      />
-                    );
-                  })}
+                  {otherBookmakers.map((bm) => (
+                    <BookieChip key={bm.key} label={bm.title} active={selectedBookies.includes(bm.key)} onToggle={() => handleBookieToggle(bm.key)} />
+                  ))}
                 </div>
               </div>
             )}
-
             <p className="text-xs text-muted-foreground">
               {selectedBookies.length === 0
                 ? "⚠️ Nenhuma casa selecionada."
-                : `${selectedBookies.length} casa${selectedBookies.length === 1 ? "" : "s"} selecionada${selectedBookies.length === 1 ? "" : "s"}.`}{" "}
-              {rawEvents.length > 0 && "Os resultados são recalculados automaticamente ao alterar a seleção."}
+                : `${selectedBookies.length} casa${selectedBookies.length === 1 ? "" : "s"} selecionada${selectedBookies.length === 1 ? "" : "s"}.`}
+              {rawEvents.length > 0 && " Resultados recalculados ao alterar a seleção."}
             </p>
           </CardContent>
         </Card>
 
-        {/* Step 2 — Esporte e busca */}
+        {/* Step 2 — Tipo de evento e Liga */}
         <Card className="border-border/60 shadow-xl">
           <CardHeader className="pb-3">
             <CardTitle className="text-base flex items-center gap-2">
-              <span className="h-5 w-5 rounded-full bg-primary text-primary-foreground text-xs flex items-center justify-center font-bold">2</span>
-              Esporte e investimento
+              <StepBadge n={2} />
+              Tipo de evento e liga
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
               <Label>Tipo de evento</Label>
-              <div className="flex gap-2">
-                {(
-                  [
-                    { value: "all",      label: "Todos" },
-                    { value: "upcoming", label: "🕐 Próximos" },
-                    { value: "live",     label: "🔴 Ao vivo" },
-                  ] as { value: EventType; label: string }[]
-                ).map(({ value, label }) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => setEventType(value)}
-                    className={`px-4 py-1.5 rounded-md border text-sm font-medium transition-colors ${
-                      eventType === value
-                        ? "border-primary/60 bg-primary/10 text-foreground"
-                        : "border-border text-muted-foreground hover:bg-secondary"
-                    }`}
-                  >
-                    {label}
-                  </button>
+              <div className="flex gap-2 flex-wrap">
+                {([
+                  { value: "all",      label: "Todos" },
+                  { value: "upcoming", label: "🕐 Próximos" },
+                  { value: "live",     label: "🔴 Ao vivo" },
+                ] as { value: EventType; label: string }[]).map(({ value, label }) => (
+                  <FilterChip key={value} label={label} active={eventType === value} onClick={() => setEventType(value)} />
                 ))}
               </div>
             </div>
-
-            <div className="grid gap-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
-            <div className="space-y-2">
-              <Label htmlFor="investment">Valor do investimento total</Label>
-              <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">
-                  R$
-                </span>
-                <Input
-                  id="investment"
-                  type="number"
-                  min={1}
-                  step={10}
-                  value={investment}
-                  onChange={(e) => setInvestment(Number(e.target.value))}
-                  className="pl-9 text-base font-medium"
-                />
-              </div>
-            </div>
-
             <div className="space-y-2">
               <Label htmlFor="sport">Esporte / Liga</Label>
               <Select value={sport} onValueChange={setSport} disabled={loadingSports}>
                 <SelectTrigger id="sport">
-                  <SelectValue
-                    placeholder={loadingSports ? "Carregando esportes..." : "Selecione"}
-                  />
+                  <SelectValue placeholder={loadingSports ? "Carregando esportes..." : "Selecione"} />
                 </SelectTrigger>
                 <SelectContent className="max-h-80">
-                  <SelectItem value="upcoming">
-                    ⭐ Próximos eventos (todos esportes)
-                  </SelectItem>
+                  <SelectItem value="upcoming">⭐ Próximos eventos (todos esportes)</SelectItem>
                   {sportGroups.map((g) => (
                     <SelectGroup key={g.group}>
                       <SelectLabel>{g.group}</SelectLabel>
                       {g.items.map((s) => (
-                        <SelectItem key={s.key} value={s.key}>
-                          {s.title}
-                        </SelectItem>
+                        <SelectItem key={s.key} value={s.key}>{s.title}</SelectItem>
                       ))}
                     </SelectGroup>
                   ))}
                 </SelectContent>
               </Select>
             </div>
+          </CardContent>
+        </Card>
 
-            <Button
-              size="lg"
-              onClick={handleSearch}
-              disabled={loading || loadingSports || selectedBookies.length === 0}
-              className="bg-[image:var(--gradient-profit)] text-primary-foreground hover:opacity-90 shadow-[var(--shadow-glow)] font-semibold"
-            >
-              {loading ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Buscando...
-                </>
-              ) : (
-                <>
-                  <Search className="h-4 w-4" />
-                  Buscar Surebets
-                </>
-              )}
-            </Button>
+        {/* Step 3 — Mercado e investimento */}
+        <Card className="border-border/60 shadow-xl">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <StepBadge n={3} />
+              Mercado e investimento
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label>Mercado</Label>
+              <div className="flex flex-wrap gap-2">
+                {MARKET_OPTIONS.map((m) => (
+                  <button
+                    key={m.key}
+                    type="button"
+                    onClick={() => handleMarketChange(m.key)}
+                    className={`flex flex-col items-start px-4 py-2.5 rounded-md border text-sm transition-colors ${
+                      marketKey === m.key
+                        ? "border-primary/60 bg-primary/10 text-foreground"
+                        : "border-border text-muted-foreground hover:bg-secondary"
+                    }`}
+                  >
+                    <span className="font-semibold">{m.label}</span>
+                    <span className="text-xs opacity-70">{m.description}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex gap-4 items-end flex-wrap">
+              <div className="space-y-2 flex-1 min-w-48">
+                <Label htmlFor="investment">Valor do investimento total</Label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">R$</span>
+                  <Input
+                    id="investment"
+                    type="number"
+                    min={1}
+                    step={10}
+                    value={investment}
+                    onChange={(e) => setInvestment(Number(e.target.value))}
+                    className="pl-9 text-base font-medium"
+                  />
+                </div>
+              </div>
+              <Button
+                size="lg"
+                onClick={handleSearch}
+                disabled={loading || loadingSports || selectedBookies.length === 0}
+                className="bg-[image:var(--gradient-profit)] text-primary-foreground hover:opacity-90 shadow-[var(--shadow-glow)] font-semibold"
+              >
+                {loading ? (
+                  <><Loader2 className="h-4 w-4 animate-spin" />Buscando...</>
+                ) : (
+                  <><Search className="h-4 w-4" />Buscar Surebets</>
+                )}
+              </Button>
             </div>
           </CardContent>
         </Card>
@@ -441,17 +548,13 @@ function Index() {
                   {results.length} oportunidade{results.length === 1 ? "" : "s"} de arbitragem
                 </h2>
                 <p className="text-sm text-muted-foreground">
-                  {lastEventCount} eventos analisados · investimento por evento: {currency(investment)}
+                  {lastEventCount} eventos analisados · mercado: {getMarketByKey(marketKey).label} · investimento: {currency(investment)}
                 </p>
               </div>
               {results.length > 0 && (
                 <div className="text-right">
-                  <div className="text-xs uppercase tracking-wider text-muted-foreground">
-                    Lucro total potencial
-                  </div>
-                  <div className="text-2xl font-bold text-primary">
-                    {currency(totalProfit)}
-                  </div>
+                  <div className="text-xs uppercase tracking-wider text-muted-foreground">Lucro total potencial</div>
+                  <div className="text-2xl font-bold text-primary">{currency(totalProfit)}</div>
                 </div>
               )}
             </div>
@@ -459,17 +562,13 @@ function Index() {
             {results.length === 0 ? (
               <Card className="border-dashed border-border/60">
                 <CardContent className="py-12 text-center text-muted-foreground space-y-1">
-                  <p>Nenhuma surebet encontrada com as casas selecionadas.</p>
-                  <p className="text-xs">
-                    Tente incluir mais casas, outro esporte, ou aguarde — as odds mudam constantemente.
-                  </p>
+                  <p>Nenhuma surebet encontrada com as configurações atuais.</p>
+                  <p className="text-xs">Tente incluir mais casas, outro esporte, mercado diferente, ou aguarde — as odds mudam constantemente.</p>
                 </CardContent>
               </Card>
             ) : (
               <div className="grid gap-4 md:grid-cols-2">
-                {results.map((opp) => (
-                  <OpportunityCard key={opp.eventId} opp={opp} />
-                ))}
+                {results.map((opp) => <OpportunityCard key={opp.eventId} opp={opp} />)}
               </div>
             )}
           </section>
@@ -481,7 +580,7 @@ function Index() {
               <Trophy className="h-10 w-10 mx-auto text-primary/60" />
               <p className="text-base font-medium">Pronto para encontrar lucro garantido</p>
               <p className="text-sm text-muted-foreground max-w-md mx-auto">
-                Selecione as casas, escolha o esporte e clique em{" "}
+                Configure as casas, tipo de evento, liga e mercado — depois clique em{" "}
                 <span className="text-foreground">Buscar Surebets</span>.
               </p>
             </CardContent>
@@ -490,38 +589,147 @@ function Index() {
 
         <footer className="pt-6 text-center text-xs text-muted-foreground">
           Odds em tempo real via{" "}
-          <a
-            href="https://the-odds-api.com/"
-            target="_blank"
-            rel="noreferrer"
-            className="underline hover:text-foreground"
-          >
+          <a href="https://the-odds-api.com/" target="_blank" rel="noreferrer" className="underline hover:text-foreground">
             The Odds API
           </a>
           . Apostas envolvem risco — verifique cada odd manualmente antes de apostar.
         </footer>
       </main>
+
+      {/* Settings Dialog */}
+      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Bot className="h-5 w-5 text-primary" />
+              Configurar Bot do Telegram
+            </DialogTitle>
+            <DialogDescription>
+              O bot busca surebets a cada 1 minuto e envia alertas no Telegram enquanto estiver ativo.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 pt-2">
+            <div className="space-y-2">
+              <Label htmlFor="bot-token">Token do Bot</Label>
+              <Input
+                id="bot-token"
+                type="password"
+                placeholder="123456789:AAFxxxxxxxxxxxxxxxxxxxxxxxx"
+                value={botToken}
+                onChange={(e) => setBotToken(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Crie um bot com <span className="font-medium text-foreground">@BotFather</span> no Telegram para obter o token.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="bot-chat">Chat ID</Label>
+              <Input
+                id="bot-chat"
+                placeholder="-1001234567890 ou @seucanal"
+                value={botChatId}
+                onChange={(e) => setBotChatId(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                ID do chat, grupo ou canal para receber os alertas.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Duração do bot</Label>
+              <div className="flex gap-2 flex-wrap">
+                {[
+                  { value: 30,  label: "30 min" },
+                  { value: 60,  label: "1 hora" },
+                  { value: 120, label: "2 horas" },
+                  { value: 0,   label: "∞ Ilimitado" },
+                ].map(({ value, label }) => (
+                  <FilterChip
+                    key={value}
+                    label={label}
+                    active={botDuration === value}
+                    onClick={() => setBotDuration(value)}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {botError && (
+              <div className="flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                {botError}
+              </div>
+            )}
+
+            {botRunning && (
+              <div className="flex items-center gap-2 rounded-md border border-green-500/40 bg-green-500/10 px-3 py-2 text-sm text-green-400">
+                <Timer className="h-4 w-4 shrink-0" />
+                <span>
+                  Bot ativo · <b>{botSentCount}</b> alertas enviados
+                  {botEndTimeRef.current ? ` · restam ${formatTime(botTimeLeft)}` : ""}
+                </span>
+              </div>
+            )}
+
+            <div className="flex gap-2 pt-1">
+              {botRunning ? (
+                <Button variant="destructive" className="flex-1" onClick={stopBot}>
+                  <StopCircle className="h-4 w-4" />
+                  Parar Bot
+                </Button>
+              ) : (
+                <Button
+                  className="flex-1 bg-[image:var(--gradient-profit)] text-primary-foreground hover:opacity-90"
+                  onClick={startBot}
+                  disabled={!botToken || !botChatId}
+                >
+                  <Send className="h-4 w-4" />
+                  Iniciar Bot
+                </Button>
+              )}
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              O bot usa as configurações de casas, esporte e mercado da tela principal. Mantenha a aba aberta enquanto o bot estiver rodando.
+            </p>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
 
-function BookieChip({
-  label,
-  active,
-  onToggle,
-}: {
-  label: string;
-  active: boolean;
-  onToggle: () => void;
-}) {
+function StepBadge({ n }: { n: number }) {
   return (
-    <label
-      className={`flex items-center gap-2 rounded-md border px-3 py-1.5 cursor-pointer transition-colors text-sm select-none ${
+    <span className="h-5 w-5 rounded-full bg-primary text-primary-foreground text-xs flex items-center justify-center font-bold shrink-0">
+      {n}
+    </span>
+  );
+}
+
+function FilterChip({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`px-4 py-1.5 rounded-md border text-sm font-medium transition-colors ${
         active
           ? "border-primary/60 bg-primary/10 text-foreground"
-          : "border-border hover:bg-secondary text-muted-foreground"
+          : "border-border text-muted-foreground hover:bg-secondary"
       }`}
     >
+      {label}
+    </button>
+  );
+}
+
+function BookieChip({ label, active, onToggle }: { label: string; active: boolean; onToggle: () => void }) {
+  return (
+    <label className={`flex items-center gap-2 rounded-md border px-3 py-1.5 cursor-pointer transition-colors text-sm select-none ${
+      active ? "border-primary/60 bg-primary/10 text-foreground" : "border-border hover:bg-secondary text-muted-foreground"
+    }`}>
       <Checkbox checked={active} onCheckedChange={onToggle} />
       <span className="font-medium">{label}</span>
     </label>
@@ -535,51 +743,37 @@ function OpportunityCard({ opp }: { opp: SurebetOpportunity }) {
   });
 
   return (
-    <Card className="border-border/60 overflow-hidden relative group">
+    <Card className="border-border/60 overflow-hidden relative">
       <div className="absolute inset-x-0 top-0 h-px bg-[image:var(--gradient-profit)]" />
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <Badge variant="secondary" className="text-xs mb-2">
-              {opp.sport}
-            </Badge>
+            <div className="flex gap-1.5 mb-2 flex-wrap">
+              <Badge variant="secondary" className="text-xs">{opp.sport}</Badge>
+              <Badge variant="outline" className="text-xs border-primary/30 text-primary">{opp.marketLabel}</Badge>
+            </div>
             <CardTitle className="text-base leading-tight">
-              {opp.homeTeam}{" "}
-              <span className="text-muted-foreground font-normal">vs</span>{" "}
-              {opp.awayTeam}
+              {opp.homeTeam} <span className="text-muted-foreground font-normal">vs</span> {opp.awayTeam}
             </CardTitle>
             <p className="text-xs text-muted-foreground mt-1">{date}</p>
           </div>
           <div className="text-right shrink-0">
-            <div className="text-xs uppercase tracking-wider text-muted-foreground">
-              Lucro
-            </div>
-            <div className="text-xl font-bold text-primary">
-              +{opp.profitPercent.toFixed(2)}%
-            </div>
-            <div className="text-xs text-primary/80">
-              {currency(opp.profitValue)}
-            </div>
+            <div className="text-xs uppercase tracking-wider text-muted-foreground">Lucro</div>
+            <div className="text-xl font-bold text-primary">+{opp.profitPercent.toFixed(2)}%</div>
+            <div className="text-xs text-primary/80">{currency(opp.profitValue)}</div>
           </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-2">
         {opp.stakes.map((s) => (
-          <div
-            key={s.name}
-            className="flex items-center justify-between rounded-md bg-secondary/50 px-3 py-2.5 border border-border/40"
-          >
+          <div key={s.name} className="flex items-center justify-between rounded-md bg-secondary/50 px-3 py-2.5 border border-border/40">
             <div className="min-w-0">
               <div className="text-sm font-medium truncate">{s.name}</div>
-              <div className="text-xs text-muted-foreground">
-                {s.bookmaker} · odd {s.price.toFixed(2)}
-              </div>
+              <div className="text-xs text-muted-foreground">{s.bookmaker} · odd {s.price.toFixed(2)}</div>
             </div>
             <div className="text-right shrink-0">
               <div className="text-sm font-semibold">{currency(s.stake)}</div>
-              <div className="text-xs text-muted-foreground">
-                retorna {currency(s.payout)}
-              </div>
+              <div className="text-xs text-muted-foreground">retorna {currency(s.payout)}</div>
             </div>
           </div>
         ))}

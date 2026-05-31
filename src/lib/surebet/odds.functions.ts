@@ -12,10 +12,6 @@ export interface SportInfo {
   has_outrights: boolean;
 }
 
-/**
- * List active sports. Used to populate the sport filter dropdown.
- * Docs: https://the-odds-api.com/liveapi/guides/v4/#get-sports
- */
 export const getSports = createServerFn({ method: "GET" }).handler(async () => {
   const apiKey = process.env.THE_ODDS_API_KEY;
   if (!apiKey) throw new Error("THE_ODDS_API_KEY is not configured");
@@ -25,26 +21,20 @@ export const getSports = createServerFn({ method: "GET" }).handler(async () => {
     throw new Error(`Falha ao buscar esportes (${res.status})`);
   }
   const sports = (await res.json()) as SportInfo[];
-  // Hide outrights (futures/winners) — they don't fit 2-way/3-way h2h arbitrage cleanly
   return sports.filter((s) => s.active && !s.has_outrights);
 });
 
 export type EventType = "all" | "upcoming" | "live";
 
-/**
- * Fetch odds for a given sport key (or "upcoming" for all sports in the next 8h).
- * eventType controls time filtering:
- *   - "upcoming": only future events (commence_time > now)
- *   - "live":     only started events (commence_time <= now, up to 24h ago)
- *   - "all":      no time filter
- * Docs: https://the-odds-api.com/liveapi/guides/v4/#get-odds
- */
 export const getOdds = createServerFn({ method: "POST" })
-  .inputValidator((input: { sportKey: string; regions?: string; eventType?: string }) => ({
-    sportKey: String(input.sportKey || "upcoming"),
-    regions: String(input.regions || "eu,uk,us,au"),
-    eventType: String(input.eventType || "all") as EventType,
-  }))
+  .inputValidator(
+    (input: { sportKey: string; regions?: string; eventType?: string; market?: string }) => ({
+      sportKey: String(input.sportKey || "upcoming"),
+      regions: String(input.regions || "eu,uk,us,au"),
+      eventType: String(input.eventType || "all") as EventType,
+      market: String(input.market || "h2h"),
+    }),
+  )
   .handler(async ({ data }): Promise<{ events: SportEvent[]; remaining: string | null }> => {
     const apiKey = process.env.THE_ODDS_API_KEY;
     if (!apiKey) throw new Error("THE_ODDS_API_KEY is not configured");
@@ -55,7 +45,7 @@ export const getOdds = createServerFn({ method: "POST" })
     const url = new URL(`${API_BASE}/sports/${data.sportKey}/odds/`);
     url.searchParams.set("apiKey", apiKey);
     url.searchParams.set("regions", data.regions);
-    url.searchParams.set("markets", "h2h");
+    url.searchParams.set("markets", data.market);
     url.searchParams.set("oddsFormat", "decimal");
     url.searchParams.set("dateFormat", "iso");
 
@@ -76,7 +66,6 @@ export const getOdds = createServerFn({ method: "POST" })
     const events = (await res.json()) as SportEvent[];
     const remaining = res.headers.get("x-requests-remaining");
 
-    // Extra client-side guard to ensure only active events are shown
     const now2 = new Date();
     const filtered = events.filter((e) => {
       const t = new Date(e.commence_time);

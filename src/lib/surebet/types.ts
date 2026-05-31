@@ -1,10 +1,11 @@
 export interface Outcome {
   name: string;
   price: number;
+  point?: number; // used by totals market (1.5, 2.5, etc.)
 }
 
 export interface Market {
-  key: string; // 'h2h'
+  key: string; // 'h2h' | 'totals' | 'btts'
   outcomes: Outcome[];
 }
 
@@ -35,11 +36,12 @@ export interface SurebetOpportunity {
   commenceTime: string;
   homeTeam: string;
   awayTeam: string;
+  marketLabel: string;
   bestHome: BestOdd;
   bestAway: BestOdd;
   bestDraw?: BestOdd;
-  arb: number; // sum of inverse odds
-  profitPercent: number; // (1 - arb) * 100 over investment? we use (1/arb - 1)
+  arb: number;
+  profitPercent: number;
   profitValue: number;
   stakes: { name: string; bookmaker: string; price: number; stake: number; payout: number }[];
 }
