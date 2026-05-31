@@ -1,0 +1,466 @@
+Parâmetros
+Esporte A chave de esporte obtida ao chamar o endpoint /sports. é sempre válido, retornando qualquer jogo ao vivo, assim como os próximos 8 jogos futuros em todos os esportesupcoming
+
+apiKey A chave API associada à sua assinatura. Veja planos de uso
+
+Regiões Determina que as casas de apostas serão devolvidas. Por exemplo, , (Estados Unidos), (Reino Unido), (Austrália) e (Europa). Múltiplas regiões podem ser especificadas se delimitadas por vírgula. Veja a lista de casas de apostas por região.usus2ukaueu
+
+Mercados Opcional - Determina qual mercado de odds é devolvido. O padrão é (head-to-head / moneyline). Mercados válidos são (moneyline), (handicaps de pontos), (over/under) e (futuros). Múltiplos mercados podem ser especificados se delimitados por vírgula. e os mercados estão disponíveis principalmente para esportes e casas de apostas dos EUA atualmente. Cada mercado especificado custa 1 contra a cota de uso, para cada região.h2hh2hspreadstotalsoutrightsspreadstotals
+
+As odds lay são automaticamente incluídas com os resultados das bolsas de apostas relevantes (Betfair, Matchbook etc). Esses têm uma chave de mercado.h2hh2h_lay
+
+Para esportes com mercados diretos (como golfe), o mercado será padrão se não especificado. Odds lay para outrights () estarão automaticamente disponíveis para as exchanges relevantes.outrightsoutrights_lay
+
+Para mais informações, veja descrições dos mercados de apostas.
+
+dateFormat Opcional - Determina o formato dos carimbos de data na resposta. Os valores válidos são e (ISO 8601). O padrão é .unixisoiso
+
+oddsFormato Opcional - Determina o formato das odds na resposta. Valores válidos são e . O padrão é . Quando definido para , pequenas discrepâncias podem existir para algumas casas de apostas devido a erros de arredondamento.decimalamericandecimalamerican
+
+eventIds Opcional - IDs de jogo separados por vírgulas. Filtra a resposta para retornar apenas jogos com os IDs especificados.
+
+Casas de apostas Opcional - Lista separada por vírgulas de casas de apostas a serem devolvidas. Se ambos e ambos forem especificados, tem prioridade. As casas de apostas podem ser de qualquer região. Cada grupo de 10 casas de apostas equivale a 1 região. Por exemplo, especificar até 10 casas de apostas conta como 1 região. Especificar entre 11 e 20 casas de apostas conta como 2 regiões.bookmakersregionsbookmakers
+
+commenceTimeFrom Opcional - filtre a resposta para mostrar jogos que começam nesse parâmetro e após ele. Os valores estão no formato ISO 8601, por exemplo, 2023-09-09T00:00:00Z. Esse parâmetro não tem efeito se o esporte estiver configurado como 'próximo'.
+
+commenceTimeTo Opcional - filtre a resposta para mostrar jogos que começam nesse parâmetro e antes. Os valores estão no formato ISO 8601, por exemplo, 2023-09-10T23:59:59Z. Esse parâmetro não tem efeito se o esporte estiver configurado como 'próximo'.
+
+incluiLinks Opcional - se , a resposta incluirá links de casas de apostas para eventos, mercados e talões de apostas, se disponíveis. Valores válidos são ou truetruefalse
+
+inclui-Sids Opcional - se , a resposta incluirá IDs de fonte (IDs de casas de apostas) para eventos, mercados e resultados, se disponíveis. Valores válidos são ou . Esse campo pode ser útil para construir seus próprios links para lidar com variações de estados ou links de aplicativos móveis.truetruefalse
+
+includeBetLimits Opcional - se , a resposta incluirá o limite de aposta de cada opção de aposta, disponível principalmente para bolsas de apostas. Valores válidos são ou truetruefalse
+
+incluiNúmeros de Rotação Opcional - se , a resposta incluirá os números da rotação em casa e fora, se disponíveis. Veja este link para mais detalhes. Valores válidos são ou .truetruefalse
+
+[
+    {
+        "id": "bda33adca828c09dc3cac3a856aef176",
+        "sport_key": "americanfootball_nfl",
+        "commence_time": "2021-09-10T00:20:00Z",
+        "home_team": "Tampa Bay Buccaneers",
+        "away_team": "Dallas Cowboys",
+        "bookmakers": [
+            {
+                "key": "unibet",
+                "title": "Unibet",
+                "last_update": "2021-06-10T13:33:18Z",
+                "markets": [
+                    {
+                        "key": "h2h",
+                        "outcomes": [
+                            {
+                                "name": "Dallas Cowboys",
+                                "price": 240
+                            },
+                            {
+                                "name": "Tampa Bay Buccaneers",
+                                "price": -303
+                            }
+                        ]
+                    },
+                    {
+                        "key": "spreads",
+                        "outcomes": [
+                            {
+                                "name": "Dallas Cowboys",
+                                "price": -109,
+                                "point": 6.5
+                            },
+                            {
+                                "name": "Tampa Bay Buccaneers",
+                                "price": -111,
+                                "point": -6.5
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "key": "caesars",
+                "title": "Caesars",
+                "last_update": "2021-06-10T13:33:48Z",
+                "markets": [
+                    {
+                        "key": "h2h",
+                        "outcomes": [
+                            {
+                                "name": "Dallas Cowboys",
+                                "price": 240
+                            },
+                            {
+                                "name": "Tampa Bay Buccaneers",
+                                "price": -278
+                            }
+                        ]
+                    },
+                    {
+                        "key": "spreads",
+                        "outcomes": [
+                            {
+                                "name": "Dallas Cowboys",
+                                "price": -110,
+                                "point": 6.5
+                            },
+                            {
+                                "name": "Tampa Bay Buccaneers",
+                                "price": -110,
+                                "point": -6.5
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "key": "sugarhouse",
+                "title": "SugarHouse",
+                "last_update": "2021-06-10T13:34:07Z",
+                "markets": [
+                    {
+                        "key": "h2h",
+                        "outcomes": [
+                            {
+                                "name": "Dallas Cowboys",
+                                "price": 240
+                            },
+                            {
+                                "name": "Tampa Bay Buccaneers",
+                                "price": -305
+                            }
+                        ]
+                    },
+                    {
+                        "key": "spreads",
+                        "outcomes": [
+                            {
+                                "name": "Dallas Cowboys",
+                                "price": -109,
+                                "point": 6.5
+                            },
+                            {
+                                "name": "Tampa Bay Buccaneers",
+                                "price": -112,
+                                "point": -6.5
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "key": "draftkings",
+                "title": "DraftKings",
+                "last_update": "2021-06-10T13:33:26Z",
+                "markets": [
+                    {
+                        "key": "h2h",
+                        "outcomes": [
+                            {
+                                "name": "Dallas Cowboys",
+                                "price": 240
+                            },
+                            {
+                                "name": "Tampa Bay Buccaneers",
+                                "price": -305
+                            }
+                        ]
+                    },
+                    {
+                        "key": "spreads",
+                        "outcomes": [
+                            {
+                                "name": "Dallas Cowboys",
+                                "price": -109,
+                                "point": 6.5
+                            },
+                            {
+                                "name": "Tampa Bay Buccaneers",
+                                "price": -112,
+                                "point": -6.5
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "key": "pointsbetus",
+                "title": "PointsBet (US)",
+                "last_update": "2021-06-10T13:36:20Z",
+                "markets": [
+                    {
+                        "key": "h2h",
+                        "outcomes": [
+                            {
+                                "name": "Dallas Cowboys",
+                                "price": 230
+                            },
+                            {
+                                "name": "Tampa Bay Buccaneers",
+                                "price": -291
+                            }
+                        ]
+                    },
+                    {
+                        "key": "spreads",
+                        "outcomes": [
+                            {
+                                "name": "Dallas Cowboys",
+                                "price": -110,
+                                "point": 6.5
+                            },
+                            {
+                                "name": "Tampa Bay Buccaneers",
+                                "price": -110,
+                                "point": -6.5
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "key": "betonlineag",
+                "title": "BetOnline.ag",
+                "last_update": "2021-06-10T13:37:29Z",
+                "markets": [
+                    {
+                        "key": "h2h",
+                        "outcomes": [
+                            {
+                                "name": "Dallas Cowboys",
+                                "price": 240
+                            },
+                            {
+                                "name": "Tampa Bay Buccaneers",
+                                "price": -286
+                            }
+                        ]
+                    },
+                    {
+                        "key": "spreads",
+                        "outcomes": [
+                            {
+                                "name": "Dallas Cowboys",
+                                "price": -105,
+                                "point": 6
+                            },
+                            {
+                                "name": "Tampa Bay Buccaneers",
+                                "price": -115,
+                                "point": -6
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "key": "betmgm",
+                "title": "BetMGM",
+                "last_update": "2021-06-10T13:32:45Z",
+                "markets": [
+                    {
+                        "key": "h2h",
+                        "outcomes": [
+                            {
+                                "name": "Dallas Cowboys",
+                                "price": 225
+                            },
+                            {
+                                "name": "Tampa Bay Buccaneers",
+                                "price": -275
+                            }
+                        ]
+                    },
+                    {
+                        "key": "spreads",
+                        "outcomes": [
+                            {
+                                "name": "Dallas Cowboys",
+                                "price": -110,
+                                "point": 6.5
+                            },
+                            {
+                                "name": "Tampa Bay Buccaneers",
+                                "price": -110,
+                                "point": -6.5
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "key": "betrivers",
+                "title": "BetRivers",
+                "last_update": "2021-06-10T13:35:33Z",
+                "markets": [
+                    {
+                        "key": "h2h",
+                        "outcomes": [
+                            {
+                                "name": "Dallas Cowboys",
+                                "price": 240
+                            },
+                            {
+                                "name": "Tampa Bay Buccaneers",
+                                "price": -305
+                            }
+                        ]
+                    },
+                    {
+                        "key": "spreads",
+                        "outcomes": [
+                            {
+                                "name": "Dallas Cowboys",
+                                "price": -109,
+                                "point": 6.5
+                            },
+                            {
+                                "name": "Tampa Bay Buccaneers",
+                                "price": -112,
+                                "point": -6.5
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "key": "fanduel",
+                "title": "FanDuel",
+                "last_update": "2021-06-10T13:33:23Z",
+                "markets": [
+                    {
+                        "key": "h2h",
+                        "outcomes": [
+                            {
+                                "name": "Dallas Cowboys",
+                                "price": 225
+                            },
+                            {
+                                "name": "Tampa Bay Buccaneers",
+                                "price": -275
+                            }
+                        ]
+                    },
+                    {
+                        "key": "spreads",
+                        "outcomes": [
+                            {
+                                "name": "Dallas Cowboys",
+                                "price": -110,
+                                "point": 6.5
+                            },
+                            {
+                                "name": "Tampa Bay Buccaneers",
+                                "price": -110,
+                                "point": -6.5
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "key": "barstool",
+                "title": "Barstool Sportsbook",
+                "last_update": "2021-06-10T13:34:48Z",
+                "markets": [
+                    {
+                        "key": "h2h",
+                        "outcomes": [
+                            {
+                                "name": "Dallas Cowboys",
+                                "price": 240
+                            },
+                            {
+                                "name": "Tampa Bay Buccaneers",
+                                "price": -305
+                            }
+                        ]
+                    },
+                    {
+                        "key": "spreads",
+                        "outcomes": [
+                            {
+                                "name": "Dallas Cowboys",
+                                "price": -109,
+                                "point": 6.5
+                            },
+                            {
+                                "name": "Tampa Bay Buccaneers",
+                                "price": -112,
+                                "point": -6.5
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "key": "bovada",
+                "title": "Bovada",
+                "last_update": "2021-06-10T13:35:51Z",
+                "markets": [
+                    {
+                        "key": "h2h",
+                        "outcomes": [
+                            {
+                                "name": "Dallas Cowboys",
+                                "price": 240
+                            },
+                            {
+                                "name": "Tampa Bay Buccaneers",
+                                "price": -290
+                            }
+                        ]
+                    },
+                    {
+                        "key": "spreads",
+                        "outcomes": [
+                            {
+                                "name": "Dallas Cowboys",
+                                "price": -110,
+                                "point": 6.5
+                            },
+                            {
+                                "name": "Tampa Bay Buccaneers",
+                                "price": -110,
+                                "point": -6.5
+                            }
+                        ]
+                    }
+                ]
+            },
+            {
+                "key": "williamhill_us",
+                "title": "William Hill (US)",
+                "last_update": "2021-06-10T13:34:10Z",
+                "markets": [
+                    {
+                        "key": "h2h",
+                        "outcomes": [
+                            {
+                                "name": "Dallas Cowboys",
+                                "price": 240
+                            },
+                            {
+                                "name": "Tampa Bay Buccaneers",
+                                "price": -280
+                            }
+                        ]
+                    },
+                    {
+                        "key": "spreads",
+                        "outcomes": [
+                            {
+                                "name": "Dallas Cowboys",
+                                "price": -110,
+                                "point": 6.5
+                            },
+                            {
+                                "name": "Tampa Bay Buccaneers",
+                                "price": -110,
+                                "point": -6.5
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    },
+...

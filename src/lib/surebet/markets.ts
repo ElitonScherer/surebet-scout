@@ -6,6 +6,8 @@ export interface MarketSpec {
   description: string;
 }
 
+// Valid markets per The Odds API docs: h2h, spreads, totals, outrights
+// btts is NOT a documented valid market key — removed
 export const MARKET_OPTIONS: MarketSpec[] = [
   {
     key: "h2h",
@@ -28,13 +30,19 @@ export const MARKET_OPTIONS: MarketSpec[] = [
     description: "Over ou Under 2.5 gols",
   },
   {
-    key: "btts",
-    apiMarket: "btts",
-    label: "Ambos Marcam",
-    description: "Ambos os times marcam (Sim / Não)",
+    key: "spreads",
+    apiMarket: "spreads",
+    label: "Handicap",
+    description: "Handicap asiático / spread de pontos",
   },
 ];
 
 export function getMarketByKey(key: string): MarketSpec {
   return MARKET_OPTIONS.find((m) => m.key === key) ?? MARKET_OPTIONS[0];
+}
+
+/** Given a list of selected market keys, return unique API market strings (comma-separated). */
+export function buildApiMarketsParam(selectedKeys: string[]): string {
+  const unique = [...new Set(selectedKeys.map((k) => getMarketByKey(k).apiMarket))];
+  return unique.join(",") || "h2h";
 }

@@ -40,7 +40,7 @@ import {
 
 import { getOdds, getSports, type SportInfo, type EventType } from "@/lib/surebet/odds.functions";
 import { findOpportunities } from "@/lib/surebet/calc";
-import { MARKET_OPTIONS, getMarketByKey } from "@/lib/surebet/markets";
+import { MARKET_OPTIONS, getMarketByKey, buildApiMarketsParam } from "@/lib/surebet/markets";
 import { sendTelegramMessage } from "@/lib/telegram.server";
 import type { SurebetOpportunity, SportEvent } from "@/lib/surebet/types";
 
@@ -137,8 +137,8 @@ function Index() {
   const [sports, setSports] = useState<SportInfo[]>([]);
   const [loadingSports, setLoadingSports] = useState(true);
 
-  // ── Market ───────────────────────────────────────────────────────────────
-  const [marketKey, setMarketKey] = useState<string>("h2h");
+  // ── Markets (multi-select) ────────────────────────────────────────────────
+  const [selectedMarkets, setSelectedMarkets] = useState<string[]>(["h2h"]);
 
   // ── Investment & search ──────────────────────────────────────────────────
   const [investment, setInvestment] = useState<number>(1000);
@@ -161,10 +161,10 @@ function Index() {
 
   const botEndTimeRef = useRef<number | null>(null);
   const latestRef = useRef({
-    sport, eventType, marketKey, selectedBookies, investment, botToken, botChatId,
+    sport, eventType, selectedMarkets, selectedBookies, investment, botToken, botChatId,
   });
   useEffect(() => {
-    latestRef.current = { sport, eventType, marketKey, selectedBookies, investment, botToken, botChatId };
+    latestRef.current = { sport, eventType, selectedMarkets, selectedBookies, investment, botToken, botChatId };
   });
 
   // ── Load sports ──────────────────────────────────────────────────────────
@@ -197,9 +197,12 @@ function Index() {
   const brBookmakers = bookmakerList.filter((b) => b.br);
   const otherBookmakers = bookmakerList.filter((b) => !b.br);
 
-  const recompute = (events: SportEvent[], selection: string[], mKey = marketKey) => {
-    const spec = getMarketByKey(mKey);
-    setResults(findOpportunities(events, selection, investment, "all", spec));
+  const recompute = (events: SportEvent[], selection: string[], mKeys = selectedMarkets) => {
+    const allOpps = mKeys.flatMap((key) =>
+      findOpportunities(events, selection, investment, "all", getMarketByKey(key)),
+    );
+    allOpps.sort((a, b) => b.profitPercent - a.profitPercent);
+    setResults(allOpps);
   };
 
   const handleBookieToggle = (key: string) => {
@@ -225,10 +228,15 @@ function Index() {
     if (rawEvents.length > 0) recompute(rawEvents, brOnly);
   };
 
-  // ── Market change ────────────────────────────────────────────────────────
-  const handleMarketChange = (key: string) => {
-    setMarketKey(key);
-    if (rawEvents.length > 0) recompute(rawEvents, selectedBookies, key);
+  // ── Market toggle (multi-select) ─────────────────────────────────────────
+  const handleMarketToggle = (key: string) => {
+    const next = selectedMarkets.includes(key)
+      ? selectedMarkets.filter((k) => k !== key).length > 0
+        ? selectedMarkets.filter((k) => k !== key)
+        : selectedMarkets // prevent deselecting the last one
+      : [...selectedMarkets, key];
+    setSelectedMarkets(next);
+    if (rawEvents.length > 0) recompute(rawEvents, selectedBookies, next);
   };
 
   // ── Search ───────────────────────────────────────────────────────────────
@@ -237,15 +245,23 @@ function Index() {
     setLoading(true);
     try {
       if (!investment || investment <= 0) throw new Error("Informe um valor de investimento válido.");
+      if (selectedMarkets.length === 0) throw new Error("Selecione ao menos um mercado.");
 
-      const spec = getMarketByKey(marketKey);
+      // Use bookmakers param for quota efficiency (per docs: each 10 bookies = 1 region)
+      const apiMarkets = buildApiMarketsParam(selectedMarkets);
       const { events, remaining: rem } = await fetchOdds({
-        data: { sportKey: sport, eventType, market: spec.apiMarket },
+        data: {
+          sportKey: sport,
+          eventType,
+          market: apiMarkets,
+          bookmakers: selectedBookies.join(","),
+        },
       });
       setRemaining(rem);
       setLastEventCount(events.length);
       setRawEvents(events as SportEvent[]);
 
+      // Discover any extra bookmakers returned and merge into list
       const bmMap = new Map<string, string>();
       for (const ev of events as SportEvent[])
         for (const bm of ev.bookmakers) bmMap.set(bm.key, bm.title);
@@ -262,7 +278,12 @@ function Index() {
       });
       setBookmakerList(sortedList);
 
-      setResults(findOpportunities(events as SportEvent[], selectedBookies, investment, "all", spec));
+      // Run calc for each selected market spec, merge + sort results
+      const allOpps = selectedMarkets.flatMap((key) =>
+        findOpportunities(events as SportEvent[], selectedBookies, investment, "all", getMarketByKey(key)),
+      );
+      allOpps.sort((a, b) => b.profitPercent - a.profitPercent);
+      setResults(allOpps);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erro inesperado.");
       setResults(null);
@@ -282,12 +303,20 @@ function Index() {
 
     const tick = async () => {
       const p = latestRef.current;
-      const spec = getMarketByKey(p.marketKey);
+      const apiMarkets = buildApiMarketsParam(p.selectedMarkets);
       try {
         const { events } = await fetchOdds({
-          data: { sportKey: p.sport, eventType: p.eventType, market: spec.apiMarket },
+          data: {
+            sportKey: p.sport,
+            eventType: p.eventType,
+            market: apiMarkets,
+            bookmakers: p.selectedBookies.join(","),
+          },
         });
-        const opps = findOpportunities(events as SportEvent[], p.selectedBookies, p.investment, "all", spec);
+        const opps = p.selectedMarkets.flatMap((key) =>
+          findOpportunities(events as SportEvent[], p.selectedBookies, p.investment, "all", getMarketByKey(key)),
+        );
+        opps.sort((a, b) => b.profitPercent - a.profitPercent);
         for (const opp of opps) {
           const msg = formatForTelegram(opp, p.investment);
           await sendTelegram({ data: { token: p.botToken, chatId: p.botChatId, message: msg } });
@@ -482,23 +511,32 @@ function Index() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
-              <Label>Mercado</Label>
+              <Label>
+                Mercado
+                <span className="ml-2 text-xs font-normal text-muted-foreground">selecione um ou mais</span>
+              </Label>
               <div className="flex flex-wrap gap-2">
-                {MARKET_OPTIONS.map((m) => (
-                  <button
-                    key={m.key}
-                    type="button"
-                    onClick={() => handleMarketChange(m.key)}
-                    className={`flex flex-col items-start px-4 py-2.5 rounded-md border text-sm transition-colors ${
-                      marketKey === m.key
-                        ? "border-primary/60 bg-primary/10 text-foreground"
-                        : "border-border text-muted-foreground hover:bg-secondary"
-                    }`}
-                  >
-                    <span className="font-semibold">{m.label}</span>
-                    <span className="text-xs opacity-70">{m.description}</span>
-                  </button>
-                ))}
+                {MARKET_OPTIONS.map((m) => {
+                  const active = selectedMarkets.includes(m.key);
+                  return (
+                    <button
+                      key={m.key}
+                      type="button"
+                      onClick={() => handleMarketToggle(m.key)}
+                      className={`flex flex-col items-start px-4 py-2.5 rounded-md border text-sm transition-colors ${
+                        active
+                          ? "border-primary/60 bg-primary/10 text-foreground"
+                          : "border-border text-muted-foreground hover:bg-secondary"
+                      }`}
+                    >
+                      <span className="font-semibold flex items-center gap-1.5">
+                        {active && <span className="h-1.5 w-1.5 rounded-full bg-primary shrink-0" />}
+                        {m.label}
+                      </span>
+                      <span className="text-xs opacity-70">{m.description}</span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
             <div className="flex gap-4 items-end flex-wrap">
@@ -548,7 +586,7 @@ function Index() {
                   {results.length} oportunidade{results.length === 1 ? "" : "s"} de arbitragem
                 </h2>
                 <p className="text-sm text-muted-foreground">
-                  {lastEventCount} eventos analisados · mercado: {getMarketByKey(marketKey).label} · investimento: {currency(investment)}
+                  {lastEventCount} eventos analisados · {selectedMarkets.map((k) => getMarketByKey(k).label).join(", ")} · investimento: {currency(investment)}
                 </p>
               </div>
               {results.length > 0 && (
@@ -568,7 +606,7 @@ function Index() {
               </Card>
             ) : (
               <div className="grid gap-4 md:grid-cols-2">
-                {results.map((opp) => <OpportunityCard key={opp.eventId} opp={opp} />)}
+                {results.map((opp) => <OpportunityCard key={`${opp.eventId}-${opp.marketLabel}`} opp={opp} />)}
               </div>
             )}
           </section>

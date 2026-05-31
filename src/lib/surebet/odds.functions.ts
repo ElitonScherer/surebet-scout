@@ -28,8 +28,15 @@ export type EventType = "all" | "upcoming" | "live";
 
 export const getOdds = createServerFn({ method: "POST" })
   .inputValidator(
-    (input: { sportKey: string; regions?: string; eventType?: string; market?: string }) => ({
+    (input: {
+      sportKey: string;
+      bookmakers?: string; // comma-separated bookie keys — more quota-efficient than regions
+      regions?: string;
+      eventType?: string;
+      market?: string; // comma-separated valid markets: h2h, spreads, totals, outrights
+    }) => ({
       sportKey: String(input.sportKey || "upcoming"),
+      bookmakers: input.bookmakers ? String(input.bookmakers) : "",
       regions: String(input.regions || "eu,uk,us,au"),
       eventType: String(input.eventType || "all") as EventType,
       market: String(input.market || "h2h"),
@@ -44,17 +51,27 @@ export const getOdds = createServerFn({ method: "POST" })
 
     const url = new URL(`${API_BASE}/sports/${data.sportKey}/odds/`);
     url.searchParams.set("apiKey", apiKey);
-    url.searchParams.set("regions", data.regions);
     url.searchParams.set("markets", data.market);
     url.searchParams.set("oddsFormat", "decimal");
     url.searchParams.set("dateFormat", "iso");
 
-    if (data.eventType === "upcoming") {
-      url.searchParams.set("commenceTimeFrom", toApiDate(now));
-    } else if (data.eventType === "live") {
-      const from = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-      url.searchParams.set("commenceTimeFrom", toApiDate(from));
-      url.searchParams.set("commenceTimeTo", toApiDate(now));
+    // Use the bookmakers param when specific bookies are provided — more quota-efficient.
+    // Per docs: each 10 bookmakers = 1 region. Avoids fetching irrelevant bookmakers.
+    if (data.bookmakers) {
+      url.searchParams.set("bookmakers", data.bookmakers);
+    } else {
+      url.searchParams.set("regions", data.regions);
+    }
+
+    // commenceTimeFrom/To have no effect when sport = 'upcoming', so only apply for specific sports
+    if (data.sportKey !== "upcoming") {
+      if (data.eventType === "upcoming") {
+        url.searchParams.set("commenceTimeFrom", toApiDate(now));
+      } else if (data.eventType === "live") {
+        const from = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        url.searchParams.set("commenceTimeFrom", toApiDate(from));
+        url.searchParams.set("commenceTimeTo", toApiDate(now));
+      }
     }
 
     const res = await fetch(url.toString());
@@ -66,6 +83,7 @@ export const getOdds = createServerFn({ method: "POST" })
     const events = (await res.json()) as SportEvent[];
     const remaining = res.headers.get("x-requests-remaining");
 
+    // Client-side event type filter (for 'upcoming' sport key, date params have no effect)
     const now2 = new Date();
     const filtered = events.filter((e) => {
       const t = new Date(e.commence_time);
